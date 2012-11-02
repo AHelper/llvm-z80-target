@@ -1,19 +1,14 @@
-; RUN: llc < %s -asm-verbose=false -march=x86-64 -use-unknown-locations | FileCheck %s
+; RUN: llc < %s -asm-verbose=false -mtriple=x86_64-apple-darwin10 -use-unknown-locations | FileCheck %s
 
 ; The divide instruction does not have a debug location. CodeGen should
-; represent this in the debug information. This is checked by a check
-; for a label between the code for the add and the code for the divide,
-; which indicates that the add's location doesn't spill over unto the
-; divide.
+; represent this in the debug information. This is done by setting line
+; and column to 0
 
-;      CHECK:         leal    (%rdi,%rsi), %eax
-; CHECK-NEXT: Ltmp
-; CHECK-NEXT:         cltd
-; CHECK-NEXT:         idivl   %r8d
-; CHECK-NEXT: Ltmp
-; CHECK-NEXT:         addl    %ecx, %eax
-; CHECK-NEXT:         ret
-; CHECK-NEXT: Ltmp
+;      CHECK:         leal
+; CHECK-NEXT:         .loc 1 0 0
+;      CHECK:         cltd
+; CHECK-NEXT:         idivl
+; CHECK-NEXT:         .loc 2 4 3
 
 define i32 @foo(i32 %w, i32 %x, i32 %y, i32 %z) nounwind {
 entry:

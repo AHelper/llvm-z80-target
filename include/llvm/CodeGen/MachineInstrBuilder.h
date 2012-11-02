@@ -18,10 +18,11 @@
 #define LLVM_CODEGEN_MACHINEINSTRBUILDER_H
 
 #include "llvm/CodeGen/MachineFunction.h"
+#include "llvm/Support/ErrorHandling.h"
 
 namespace llvm {
 
-class TargetInstrDesc;
+class MCInstrDesc;
 class MDNode;
 
 namespace RegState {
@@ -33,6 +34,7 @@ namespace RegState {
     Undef          = 0x20,
     EarlyClobber   = 0x40,
     Debug          = 0x80,
+    DefineNoRead   = Define | Undef,
     ImplicitDefine = Implicit | Define,
     ImplicitKill   = Implicit | Kill
   };
@@ -47,6 +49,7 @@ public:
   /// Allow automatic conversion to the machine instruction we are working on.
   ///
   operator MachineInstr*() const { return MI; }
+  MachineInstr *operator->() const { return MI; }
   operator MachineBasicBlock::iterator() const { return MI; }
 
   /// addReg - Add a new virtual register operand...
@@ -75,6 +78,11 @@ public:
     return *this;
   }
 
+  const MachineInstrBuilder &addCImm(const ConstantInt *Val) const {
+    MI->addOperand(MachineOperand::CreateCImm(Val));
+    return *this;
+  }
+
   const MachineInstrBuilder &addFPImm(const ConstantFP *Val) const {
     MI->addOperand(MachineOperand::CreateFPImm(Val));
     return *this;
@@ -86,7 +94,7 @@ public:
     return *this;
   }
 
-  const MachineInstrBuilder &addFrameIndex(unsigned Idx) const {
+  const MachineInstrBuilder &addFrameIndex(int Idx) const {
     MI->addOperand(MachineOperand::CreateFI(Idx));
     return *this;
   }
@@ -117,10 +125,22 @@ public:
     return *this;
   }
 
+  const MachineInstrBuilder &addRegMask(const uint32_t *Mask) const {
+    MI->addOperand(MachineOperand::CreateRegMask(Mask));
+    return *this;
+  }
+
   const MachineInstrBuilder &addMemOperand(MachineMemOperand *MMO) const {
     MI->addMemOperand(*MI->getParent()->getParent(), MMO);
     return *this;
   }
+
+  const MachineInstrBuilder &setMemRefs(MachineInstr::mmo_iterator b,
+                                        MachineInstr::mmo_iterator e) const {
+    MI->setMemRefs(b, e);
+    return *this;
+  }
+
 
   const MachineInstrBuilder &addOperand(const MachineOperand &MO) const {
     MI->addOperand(MO);
@@ -136,6 +156,29 @@ public:
     MI->addOperand(MachineOperand::CreateMCSymbol(Sym));
     return *this;
   }
+
+  const MachineInstrBuilder &setMIFlags(unsigned Flags) const {
+    MI->setFlags(Flags);
+    return *this;
+  }
+
+  const MachineInstrBuilder &setMIFlag(MachineInstr::MIFlag Flag) const {
+    MI->setFlag(Flag);
+    return *this;
+  }
+
+  // Add a displacement from an existing MachineOperand with an added offset.
+  const MachineInstrBuilder &addDisp(const MachineOperand &Disp,
+                                     int64_t off) const {
+    switch (Disp.getType()) {
+      default:
+        llvm_unreachable("Unhandled operand type in addDisp()");
+      case MachineOperand::MO_Immediate:
+        return addImm(Disp.getImm() + off);
+      case MachineOperand::MO_GlobalAddress:
+        return addGlobalAddress(Disp.getGlobal(), Disp.getOffset() + off);
+    }
+  }
 };
 
 /// BuildMI - Builder interface.  Specify how to create the initial instruction
@@ -143,8 +186,8 @@ public:
 ///
 inline MachineInstrBuilder BuildMI(MachineFunction &MF,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID) {
-  return MachineInstrBuilder(MF.CreateMachineInstr(TID, DL));
+                                   const MCInstrDesc &MCID) {
+  return MachineInstrBuilder(MF.CreateMachineInstr(MCID, DL));
 }
 
 /// BuildMI - This version of the builder sets up the first operand as a
@@ -152,9 +195,9 @@ inline MachineInstrBuilder BuildMI(MachineFunction &MF,
 ///
 inline MachineInstrBuilder BuildMI(MachineFunction &MF,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID,
+                                   const MCInstrDesc &MCID,
                                    unsigned DestReg) {
-  return MachineInstrBuilder(MF.CreateMachineInstr(TID, DL))
+  return MachineInstrBuilder(MF.CreateMachineInstr(MCID, DL))
            .addReg(DestReg, RegState::Define);
 }
 
@@ -165,11 +208,35 @@ inline MachineInstrBuilder BuildMI(MachineFunction &MF,
 inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                                    MachineBasicBlock::iterator I,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID,
+                                   const MCInstrDesc &MCID,
                                    unsigned DestReg) {
-  MachineInstr *MI = BB.getParent()->CreateMachineInstr(TID, DL);
+  MachineInstr *MI = BB.getParent()->CreateMachineInstr(MCID, DL);
   BB.insert(I, MI);
   return MachineInstrBuilder(MI).addReg(DestReg, RegState::Define);
+}
+
+inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
+                                   MachineBasicBlock::instr_iterator I,
+                                   DebugLoc DL,
+                                   const MCInstrDesc &MCID,
+                                   unsigned DestReg) {
+  MachineInstr *MI = BB.getParent()->CreateMachineInstr(MCID, DL);
+  BB.insert(I, MI);
+  return MachineInstrBuilder(MI).addReg(DestReg, RegState::Define);
+}
+
+inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
+                                   MachineInstr *I,
+                                   DebugLoc DL,
+                                   const MCInstrDesc &MCID,
+                                   unsigned DestReg) {
+  if (I->isInsideBundle()) {
+    MachineBasicBlock::instr_iterator MII = I;
+    return BuildMI(BB, MII, DL, MCID, DestReg);
+  }
+
+  MachineBasicBlock::iterator MII = I;
+  return BuildMI(BB, MII, DL, MCID, DestReg);
 }
 
 /// BuildMI - This version of the builder inserts the newly-built
@@ -179,10 +246,32 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
 inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
                                    MachineBasicBlock::iterator I,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID) {
-  MachineInstr *MI = BB.getParent()->CreateMachineInstr(TID, DL);
+                                   const MCInstrDesc &MCID) {
+  MachineInstr *MI = BB.getParent()->CreateMachineInstr(MCID, DL);
   BB.insert(I, MI);
   return MachineInstrBuilder(MI);
+}
+
+inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
+                                   MachineBasicBlock::instr_iterator I,
+                                   DebugLoc DL,
+                                   const MCInstrDesc &MCID) {
+  MachineInstr *MI = BB.getParent()->CreateMachineInstr(MCID, DL);
+  BB.insert(I, MI);
+  return MachineInstrBuilder(MI);
+}
+
+inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
+                                   MachineInstr *I,
+                                   DebugLoc DL,
+                                   const MCInstrDesc &MCID) {
+  if (I->isInsideBundle()) {
+    MachineBasicBlock::instr_iterator MII = I;
+    return BuildMI(BB, MII, DL, MCID);
+  }
+
+  MachineBasicBlock::iterator MII = I;
+  return BuildMI(BB, MII, DL, MCID);
 }
 
 /// BuildMI - This version of the builder inserts the newly-built
@@ -191,8 +280,8 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock &BB,
 ///
 inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID) {
-  return BuildMI(*BB, BB->end(), DL, TID);
+                                   const MCInstrDesc &MCID) {
+  return BuildMI(*BB, BB->end(), DL, MCID);
 }
 
 /// BuildMI - This version of the builder inserts the newly-built
@@ -201,9 +290,9 @@ inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
 ///
 inline MachineInstrBuilder BuildMI(MachineBasicBlock *BB,
                                    DebugLoc DL,
-                                   const TargetInstrDesc &TID,
+                                   const MCInstrDesc &MCID,
                                    unsigned DestReg) {
-  return BuildMI(*BB, BB->end(), DL, TID, DestReg);
+  return BuildMI(*BB, BB->end(), DL, MCID, DestReg);
 }
 
 inline unsigned getDefRegState(bool B) {

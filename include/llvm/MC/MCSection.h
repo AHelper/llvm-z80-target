@@ -14,13 +14,10 @@
 #ifndef LLVM_MC_MCSECTION_H
 #define LLVM_MC_MCSECTION_H
 
-#include <string>
-#include "llvm/ADT/StringRef.h"
 #include "llvm/MC/SectionKind.h"
 #include "llvm/Support/Casting.h"
 
 namespace llvm {
-  class MCContext;
   class MCAsmInfo;
   class raw_ostream;
 
@@ -32,8 +29,7 @@ namespace llvm {
     enum SectionVariant {
       SV_COFF = 0,
       SV_ELF,
-      SV_MachO,
-      SV_PIC16
+      SV_MachO
     };
 
   private:
@@ -60,6 +56,14 @@ namespace llvm {
     virtual bool isBaseAddressKnownZero() const {
       return false;
     }
+
+    // UseCodeAlign - Return true if a .align directive should use
+    // "optimized nops" to fill instead of 0s.
+    virtual bool UseCodeAlign() const = 0;
+
+    /// isVirtualSection - Check whether this section is "virtual", that is
+    /// has no actual object file contents.
+    virtual bool isVirtualSection() const = 0;
 
     static bool classof(const MCSection *) { return true; }
   };

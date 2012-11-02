@@ -16,13 +16,12 @@
 #define THUMB2REGISTERINFO_H
 
 #include "ARM.h"
-#include "ARMRegisterInfo.h"
+#include "ARMBaseRegisterInfo.h"
 #include "llvm/Target/TargetRegisterInfo.h"
 
 namespace llvm {
   class ARMSubtarget;
   class ARMBaseInstrInfo;
-  class Type;
 
 struct Thumb2RegisterInfo : public ARMBaseRegisterInfo {
 public:
@@ -35,7 +34,8 @@ public:
                          DebugLoc dl,
                          unsigned DestReg, unsigned SubIdx, int Val,
                          ARMCC::CondCodes Pred = ARMCC::AL,
-                         unsigned PredReg = 0) const;
+                         unsigned PredReg = 0,
+                         unsigned MIFlags = MachineInstr::NoFlags) const;
 };
 }
 

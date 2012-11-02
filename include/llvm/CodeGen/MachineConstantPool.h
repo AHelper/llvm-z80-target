@@ -16,6 +16,7 @@
 #ifndef LLVM_CODEGEN_MACHINECONSTANTPOOL_H
 #define LLVM_CODEGEN_MACHINECONSTANTPOOL_H
 
+#include "llvm/ADT/DenseSet.h"
 #include <cassert>
 #include <climits>
 #include <vector>
@@ -33,15 +34,16 @@ class raw_ostream;
 /// Abstract base class for all machine specific constantpool value subclasses.
 ///
 class MachineConstantPoolValue {
-  const Type *Ty;
+  virtual void anchor();
+  Type *Ty;
 
 public:
-  explicit MachineConstantPoolValue(const Type *ty) : Ty(ty) {}
+  explicit MachineConstantPoolValue(Type *ty) : Ty(ty) {}
   virtual ~MachineConstantPoolValue() {}
 
   /// getType - get type of this MachineConstantPoolValue.
   ///
-  const Type *getType() const { return Ty; }
+  Type *getType() const { return Ty; }
 
   
   /// getRelocationInfo - This method classifies the entry according to
@@ -53,7 +55,7 @@ public:
   virtual int getExistingMachineCPValue(MachineConstantPool *CP,
                                         unsigned Alignment) = 0;
 
-  virtual void AddSelectionDAGCSEId(FoldingSetNodeID &ID) = 0;
+  virtual void addSelectionDAGCSEId(FoldingSetNodeID &ID) = 0;
 
   /// print - Implement operator<<
   virtual void print(raw_ostream &O) const = 0;
@@ -79,7 +81,7 @@ public:
   } Val;
 
   /// The required alignment for this entry. The top bit is set when Val is
-  /// a MachineConstantPoolValue.
+  /// a target specific MachineConstantPoolValue.
   unsigned Alignment;
 
   MachineConstantPoolEntry(const Constant *V, unsigned A)
@@ -92,6 +94,9 @@ public:
     Alignment |= 1U << (sizeof(unsigned)*CHAR_BIT-1);
   }
 
+  /// isMachineConstantPoolEntry - Return true if the MachineConstantPoolEntry
+  /// is indeed a target specific constantpool entry, not a wrapper over a
+  /// Constant.
   bool isMachineConstantPoolEntry() const {
     return (int)Alignment < 0;
   }
@@ -100,7 +105,7 @@ public:
     return Alignment & ~(1 << (sizeof(unsigned)*CHAR_BIT-1));
   }
 
-  const Type *getType() const;
+  Type *getType() const;
   
   /// getRelocationInfo - This method classifies the entry according to
   /// whether or not it may generate a relocation entry.  This must be
@@ -130,6 +135,8 @@ class MachineConstantPool {
   const TargetData *TD;   ///< The machine's TargetData.
   unsigned PoolAlignment; ///< The alignment for the pool.
   std::vector<MachineConstantPoolEntry> Constants; ///< The pool of constants.
+  /// MachineConstantPoolValues that use an existing MachineConstantPoolEntry.
+  DenseSet<MachineConstantPoolValue*> MachineCPVsSharingEntries;
 public:
   /// @brief The only constructor.
   explicit MachineConstantPool(const TargetData *td)

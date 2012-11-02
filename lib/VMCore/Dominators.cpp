@@ -17,11 +17,12 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Support/CFG.h"
 #include "llvm/Support/Compiler.h"
+#include "llvm/Support/Debug.h"
 #include "llvm/ADT/DepthFirstIterator.h"
-#include "llvm/ADT/SetOperations.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Analysis/DominatorInternals.h"
+#include "llvm/Assembly/Writer.h"
 #include "llvm/Instructions.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/CommandLine.h"
@@ -43,7 +44,7 @@ VerifyDomInfoX("verify-dom-info", cl::location(VerifyDomInfo),
 //===----------------------------------------------------------------------===//
 //
 // Provide public access to DominatorTree information.  Implementation details
-// can be found in DominatorCalculation.h.
+// can be found in DominatorInternals.h.
 //
 //===----------------------------------------------------------------------===//
 
@@ -51,8 +52,8 @@ TEMPLATE_INSTANTIATION(class llvm::DomTreeNodeBase<BasicBlock>);
 TEMPLATE_INSTANTIATION(class llvm::DominatorTreeBase<BasicBlock>);
 
 char DominatorTree::ID = 0;
-static RegisterPass<DominatorTree>
-E("domtree", "Dominator Tree Construction", true, true);
+INITIALIZE_PASS(DominatorTree, "domtree",
+                "Dominator Tree Construction", true, true)
 
 bool DominatorTree::runOnFunction(Function &F) {
   DT->recalculate(F);
@@ -66,280 +67,200 @@ void DominatorTree::verifyAnalysis() const {
 
   DominatorTree OtherDT;
   OtherDT.getBase().recalculate(F);
-  assert(!compare(OtherDT) && "Invalid DominatorTree info!");
+  if (compare(OtherDT)) {
+    errs() << "DominatorTree is not up to date!\nComputed:\n";
+    print(errs());
+    errs() << "\nActual:\n";
+    OtherDT.print(errs());
+    abort();
+  }
 }
 
 void DominatorTree::print(raw_ostream &OS, const Module *) const {
   DT->print(OS);
 }
 
-// dominates - Return true if A dominates a use in B. This performs the
-// special checks necessary if A and B are in the same basic block.
-bool DominatorTree::dominates(const Instruction *A, const Instruction *B) const{
-  const BasicBlock *BBA = A->getParent(), *BBB = B->getParent();
-  
-  // If A is an invoke instruction, its value is only available in this normal
-  // successor block.
-  if (const InvokeInst *II = dyn_cast<InvokeInst>(A))
-    BBA = II->getNormalDest();
-  
-  if (BBA != BBB) return dominates(BBA, BBB);
-  
-  // It is not possible to determine dominance between two PHI nodes 
-  // based on their ordering.
-  if (isa<PHINode>(A) && isa<PHINode>(B)) 
+// dominates - Return true if Def dominates a use in User. This performs
+// the special checks necessary if Def and User are in the same basic block.
+// Note that Def doesn't dominate a use in Def itself!
+bool DominatorTree::dominates(const Instruction *Def,
+                              const Instruction *User) const {
+  const BasicBlock *UseBB = User->getParent();
+  const BasicBlock *DefBB = Def->getParent();
+
+  // Any unreachable use is dominated, even if Def == User.
+  if (!isReachableFromEntry(UseBB))
+    return true;
+
+  // Unreachable definitions don't dominate anything.
+  if (!isReachableFromEntry(DefBB))
     return false;
-  
-  // Loop through the basic block until we find A or B.
-  BasicBlock::const_iterator I = BBA->begin();
-  for (; &*I != A && &*I != B; ++I)
+
+  // An instruction doesn't dominate a use in itself.
+  if (Def == User)
+    return false;
+
+  // The value defined by an invoke dominates an instruction only if
+  // it dominates every instruction in UseBB.
+  // A PHI is dominated only if the instruction dominates every possible use
+  // in the UseBB.
+  if (isa<InvokeInst>(Def) || isa<PHINode>(User))
+    return dominates(Def, UseBB);
+
+  if (DefBB != UseBB)
+    return dominates(DefBB, UseBB);
+
+  // Loop through the basic block until we find Def or User.
+  BasicBlock::const_iterator I = DefBB->begin();
+  for (; &*I != Def && &*I != User; ++I)
     /*empty*/;
-  
-  return &*I == A;
+
+  return &*I == Def;
 }
 
+// true if Def would dominate a use in any instruction in UseBB.
+// note that dominates(Def, Def->getParent()) is false.
+bool DominatorTree::dominates(const Instruction *Def,
+                              const BasicBlock *UseBB) const {
+  const BasicBlock *DefBB = Def->getParent();
 
+  // Any unreachable use is dominated, even if DefBB == UseBB.
+  if (!isReachableFromEntry(UseBB))
+    return true;
 
-//===----------------------------------------------------------------------===//
-//  DominanceFrontier Implementation
-//===----------------------------------------------------------------------===//
+  // Unreachable definitions don't dominate anything.
+  if (!isReachableFromEntry(DefBB))
+    return false;
 
-char DominanceFrontier::ID = 0;
-static RegisterPass<DominanceFrontier>
-G("domfrontier", "Dominance Frontier Construction", true, true);
+  if (DefBB == UseBB)
+    return false;
 
-void DominanceFrontier::verifyAnalysis() const {
-  if (!VerifyDomInfo) return;
+  const InvokeInst *II = dyn_cast<InvokeInst>(Def);
+  if (!II)
+    return dominates(DefBB, UseBB);
 
-  DominatorTree &DT = getAnalysis<DominatorTree>();
+  // Invoke results are only usable in the normal destination, not in the
+  // exceptional destination.
+  BasicBlock *NormalDest = II->getNormalDest();
+  if (!dominates(NormalDest, UseBB))
+    return false;
 
-  DominanceFrontier OtherDF;
-  const std::vector<BasicBlock*> &DTRoots = DT.getRoots();
-  OtherDF.calculate(DT, DT.getNode(DTRoots[0]));
-  assert(!compare(OtherDF) && "Invalid DominanceFrontier info!");
-}
+  // Simple case: if the normal destination has a single predecessor, the
+  // fact that it dominates the use block implies that we also do.
+  if (NormalDest->getSinglePredecessor())
+    return true;
 
-// NewBB is split and now it has one successor. Update dominance frontier to
-// reflect this change.
-void DominanceFrontier::splitBlock(BasicBlock *NewBB) {
-  assert(NewBB->getTerminator()->getNumSuccessors() == 1
-         && "NewBB should have a single successor!");
-  BasicBlock *NewBBSucc = NewBB->getTerminator()->getSuccessor(0);
-
-  SmallVector<BasicBlock*, 8> PredBlocks;
-  for (pred_iterator PI = pred_begin(NewBB), PE = pred_end(NewBB);
-       PI != PE; ++PI)
-    PredBlocks.push_back(*PI);  
-
-  if (PredBlocks.empty())
-    // If NewBB does not have any predecessors then it is a entry block.
-    // In this case, NewBB and its successor NewBBSucc dominates all
-    // other blocks.
-    return;
-
-  // NewBBSucc inherits original NewBB frontier.
-  DominanceFrontier::iterator NewBBI = find(NewBB);
-  if (NewBBI != end()) {
-    DominanceFrontier::DomSetType NewBBSet = NewBBI->second;
-    DominanceFrontier::DomSetType NewBBSuccSet;
-    NewBBSuccSet.insert(NewBBSet.begin(), NewBBSet.end());
-    addBasicBlock(NewBBSucc, NewBBSuccSet);
-  }
-
-  // If NewBB dominates NewBBSucc, then DF(NewBB) is now going to be the
-  // DF(PredBlocks[0]) without the stuff that the new block does not dominate
-  // a predecessor of.
-  DominatorTree &DT = getAnalysis<DominatorTree>();
-  if (DT.dominates(NewBB, NewBBSucc)) {
-    DominanceFrontier::iterator DFI = find(PredBlocks[0]);
-    if (DFI != end()) {
-      DominanceFrontier::DomSetType Set = DFI->second;
-      // Filter out stuff in Set that we do not dominate a predecessor of.
-      for (DominanceFrontier::DomSetType::iterator SetI = Set.begin(),
-             E = Set.end(); SetI != E;) {
-        bool DominatesPred = false;
-        for (pred_iterator PI = pred_begin(*SetI), E = pred_end(*SetI);
-             PI != E; ++PI)
-          if (DT.dominates(NewBB, *PI))
-            DominatesPred = true;
-        if (!DominatesPred)
-          Set.erase(SetI++);
-        else
-          ++SetI;
-      }
-
-      if (NewBBI != end()) {
-        for (DominanceFrontier::DomSetType::iterator SetI = Set.begin(),
-               E = Set.end(); SetI != E; ++SetI) {
-          BasicBlock *SB = *SetI;
-          addToFrontier(NewBBI, SB);
-        }
-      } else 
-        addBasicBlock(NewBB, Set);
-    }
-    
-  } else {
-    // DF(NewBB) is {NewBBSucc} because NewBB does not strictly dominate
-    // NewBBSucc, but it does dominate itself (and there is an edge (NewBB ->
-    // NewBBSucc)).  NewBBSucc is the single successor of NewBB.
-    DominanceFrontier::DomSetType NewDFSet;
-    NewDFSet.insert(NewBBSucc);
-    addBasicBlock(NewBB, NewDFSet);
-  }
-  
-  // Now we must loop over all of the dominance frontiers in the function,
-  // replacing occurrences of NewBBSucc with NewBB in some cases.  All
-  // blocks that dominate a block in PredBlocks and contained NewBBSucc in
-  // their dominance frontier must be updated to contain NewBB instead.
+  // The normal edge from the invoke is critical. Conceptually, what we would
+  // like to do is split it and check if the new block dominates the use.
+  // With X being the new block, the graph would look like:
   //
-  for (Function::iterator FI = NewBB->getParent()->begin(),
-         FE = NewBB->getParent()->end(); FI != FE; ++FI) {
-    DominanceFrontier::iterator DFI = find(FI);
-    if (DFI == end()) continue;  // unreachable block.
-    
-    // Only consider nodes that have NewBBSucc in their dominator frontier.
-    if (!DFI->second.count(NewBBSucc)) continue;
+  //        DefBB
+  //          /\      .  .
+  //         /  \     .  .
+  //        /    \    .  .
+  //       /      \   |  |
+  //      A        X  B  C
+  //      |         \ | /
+  //      .          \|/
+  //      .      NormalDest
+  //      .
+  //
+  // Given the definition of dominance, NormalDest is dominated by X iff X
+  // dominates all of NormalDest's predecessors (X, B, C in the example). X
+  // trivially dominates itself, so we only have to find if it dominates the
+  // other predecessors. Since the only way out of X is via NormalDest, X can
+  // only properly dominate a node if NormalDest dominates that node too.
+  for (pred_iterator PI = pred_begin(NormalDest),
+         E = pred_end(NormalDest); PI != E; ++PI) {
+    const BasicBlock *BB = *PI;
+    if (BB == DefBB)
+      continue;
 
-    // Verify whether this block dominates a block in predblocks.  If not, do
-    // not update it.
-    bool BlockDominatesAny = false;
-    for (SmallVectorImpl<BasicBlock*>::const_iterator BI = PredBlocks.begin(), 
-           BE = PredBlocks.end(); BI != BE; ++BI) {
-      if (DT.dominates(FI, *BI)) {
-        BlockDominatesAny = true;
-        break;
-      }
-    }
+    if (!DT->isReachableFromEntry(BB))
+      continue;
 
-    // If NewBBSucc should not stay in our dominator frontier, remove it.
-    // We remove it unless there is a predecessor of NewBBSucc that we
-    // dominate, but we don't strictly dominate NewBBSucc.
-    bool ShouldRemove = true;
-    if ((BasicBlock*)FI == NewBBSucc || !DT.dominates(FI, NewBBSucc)) {
-      // Okay, we know that PredDom does not strictly dominate NewBBSucc.
-      // Check to see if it dominates any predecessors of NewBBSucc.
-      for (pred_iterator PI = pred_begin(NewBBSucc),
-           E = pred_end(NewBBSucc); PI != E; ++PI)
-        if (DT.dominates(FI, *PI)) {
-          ShouldRemove = false;
-          break;
-        }
-    }
-    
-    if (ShouldRemove)
-      removeFromFrontier(DFI, NewBBSucc);
-    if (BlockDominatesAny && (&*FI == NewBB || !DT.dominates(FI, NewBB)))
-      addToFrontier(DFI, NewBB);
+    if (!dominates(NormalDest, BB))
+      return false;
   }
+  return true;
 }
 
-namespace {
-  class DFCalculateWorkObject {
-  public:
-    DFCalculateWorkObject(BasicBlock *B, BasicBlock *P, 
-                          const DomTreeNode *N,
-                          const DomTreeNode *PN)
-    : currentBB(B), parentBB(P), Node(N), parentNode(PN) {}
-    BasicBlock *currentBB;
-    BasicBlock *parentBB;
-    const DomTreeNode *Node;
-    const DomTreeNode *parentNode;
-  };
-}
+bool DominatorTree::dominates(const Instruction *Def,
+                              const Use &U) const {
+  Instruction *UserInst = dyn_cast<Instruction>(U.getUser());
 
-const DominanceFrontier::DomSetType &
-DominanceFrontier::calculate(const DominatorTree &DT,
-                             const DomTreeNode *Node) {
-  BasicBlock *BB = Node->getBlock();
-  DomSetType *Result = NULL;
+  // Instructions do not dominate non-instructions.
+  if (!UserInst)
+    return false;
 
-  std::vector<DFCalculateWorkObject> workList;
-  SmallPtrSet<BasicBlock *, 32> visited;
+  const BasicBlock *DefBB = Def->getParent();
 
-  workList.push_back(DFCalculateWorkObject(BB, NULL, Node, NULL));
-  do {
-    DFCalculateWorkObject *currentW = &workList.back();
-    assert (currentW && "Missing work object.");
+  // Determine the block in which the use happens. PHI nodes use
+  // their operands on edges; simulate this by thinking of the use
+  // happening at the end of the predecessor block.
+  const BasicBlock *UseBB;
+  if (PHINode *PN = dyn_cast<PHINode>(UserInst))
+    UseBB = PN->getIncomingBlock(U);
+  else
+    UseBB = UserInst->getParent();
 
-    BasicBlock *currentBB = currentW->currentBB;
-    BasicBlock *parentBB = currentW->parentBB;
-    const DomTreeNode *currentNode = currentW->Node;
-    const DomTreeNode *parentNode = currentW->parentNode;
-    assert (currentBB && "Invalid work object. Missing current Basic Block");
-    assert (currentNode && "Invalid work object. Missing current Node");
-    DomSetType &S = Frontiers[currentBB];
+  // Any unreachable use is dominated, even if Def == User.
+  if (!isReachableFromEntry(UseBB))
+    return true;
 
-    // Visit each block only once.
-    if (visited.count(currentBB) == 0) {
-      visited.insert(currentBB);
+  // Unreachable definitions don't dominate anything.
+  if (!isReachableFromEntry(DefBB))
+    return false;
 
-      // Loop over CFG successors to calculate DFlocal[currentNode]
-      for (succ_iterator SI = succ_begin(currentBB), SE = succ_end(currentBB);
-           SI != SE; ++SI) {
-        // Does Node immediately dominate this successor?
-        if (DT[*SI]->getIDom() != currentNode)
-          S.insert(*SI);
-      }
-    }
+  // Invoke instructions define their return values on the edges
+  // to their normal successors, so we have to handle them specially.
+  // Among other things, this means they don't dominate anything in
+  // their own block, except possibly a phi, so we don't need to
+  // walk the block in any case.
+  if (const InvokeInst *II = dyn_cast<InvokeInst>(Def)) {
+    // A PHI in the normal successor using the invoke's return value is
+    // dominated by the invoke's return value.
+    if (isa<PHINode>(UserInst) &&
+        UserInst->getParent() == II->getNormalDest() &&
+        cast<PHINode>(UserInst)->getIncomingBlock(U) == DefBB)
+      return true;
 
-    // At this point, S is DFlocal.  Now we union in DFup's of our children...
-    // Loop through and visit the nodes that Node immediately dominates (Node's
-    // children in the IDomTree)
-    bool visitChild = false;
-    for (DomTreeNode::const_iterator NI = currentNode->begin(), 
-           NE = currentNode->end(); NI != NE; ++NI) {
-      DomTreeNode *IDominee = *NI;
-      BasicBlock *childBB = IDominee->getBlock();
-      if (visited.count(childBB) == 0) {
-        workList.push_back(DFCalculateWorkObject(childBB, currentBB,
-                                                 IDominee, currentNode));
-        visitChild = true;
-      }
-    }
-
-    // If all children are visited or there is any child then pop this block
-    // from the workList.
-    if (!visitChild) {
-
-      if (!parentBB) {
-        Result = &S;
-        break;
-      }
-
-      DomSetType::const_iterator CDFI = S.begin(), CDFE = S.end();
-      DomSetType &parentSet = Frontiers[parentBB];
-      for (; CDFI != CDFE; ++CDFI) {
-        if (!DT.properlyDominates(parentNode, DT[*CDFI]))
-          parentSet.insert(*CDFI);
-      }
-      workList.pop_back();
-    }
-
-  } while (!workList.empty());
-
-  return *Result;
-}
-
-void DominanceFrontierBase::print(raw_ostream &OS, const Module* ) const {
-  for (const_iterator I = begin(), E = end(); I != E; ++I) {
-    OS << "  DomFrontier for BB ";
-    if (I->first)
-      WriteAsOperand(OS, I->first, false);
-    else
-      OS << " <<exit node>>";
-    OS << " is:\t";
-    
-    const std::set<BasicBlock*> &BBs = I->second;
-    
-    for (std::set<BasicBlock*>::const_iterator I = BBs.begin(), E = BBs.end();
-         I != E; ++I) {
-      OS << ' ';
-      if (*I)
-        WriteAsOperand(OS, *I, false);
-      else
-        OS << "<<exit node>>";
-    }
-    OS << "\n";
+    // Otherwise use the instruction-dominates-block query, which
+    // handles the crazy case of an invoke with a critical edge
+    // properly.
+    return dominates(Def, UseBB);
   }
+
+  // If the def and use are in different blocks, do a simple CFG dominator
+  // tree query.
+  if (DefBB != UseBB)
+    return dominates(DefBB, UseBB);
+
+  // Ok, def and use are in the same block. If the def is an invoke, it
+  // doesn't dominate anything in the block. If it's a PHI, it dominates
+  // everything in the block.
+  if (isa<PHINode>(UserInst))
+    return true;
+
+  // Otherwise, just loop through the basic block until we find Def or User.
+  BasicBlock::const_iterator I = DefBB->begin();
+  for (; &*I != Def && &*I != UserInst; ++I)
+    /*empty*/;
+
+  return &*I != UserInst;
 }
 
+bool DominatorTree::isReachableFromEntry(const Use &U) const {
+  Instruction *I = dyn_cast<Instruction>(U.getUser());
+
+  // ConstantExprs aren't really reachable from the entry block, but they
+  // don't need to be treated like unreachable code either.
+  if (!I) return true;
+
+  // PHI nodes use their operands on their incoming edges.
+  if (PHINode *PN = dyn_cast<PHINode>(I))
+    return isReachableFromEntry(PN->getIncomingBlock(U));
+
+  // Everything else uses their operands in their own block.
+  return isReachableFromEntry(I->getParent());
+}

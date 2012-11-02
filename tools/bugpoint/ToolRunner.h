@@ -21,7 +21,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/SystemUtils.h"
-#include "llvm/System/Path.h"
+#include "llvm/Support/Path.h"
 #include <exception>
 #include <vector>
 
@@ -64,9 +64,9 @@ public:
                      FileType fileType,
                      const std::string &InputFile,
                      const std::string &OutputFile,
-		     std::string *Error = 0,
+                     std::string *Error = 0,
                      const std::vector<std::string> &GCCArgs =
-                         std::vector<std::string>(), 
+                         std::vector<std::string>(),
                      unsigned Timeout = 0,
                      unsigned MemoryLimit = 0);
 
@@ -86,6 +86,7 @@ public:
 /// complexity behind a simple interface.
 ///
 class AbstractInterpreter {
+  virtual void anchor();
 public:
   static CBE *createCBE(const char *Argv0, std::string &Message,
                         const std::string              &GCCBinary,
@@ -103,8 +104,13 @@ public:
   static AbstractInterpreter* createJIT(const char *Argv0, std::string &Message,
                                         const std::vector<std::string> *Args=0);
 
-  static AbstractInterpreter* createCustom(std::string &Message,
-                                           const std::string &ExecCommandLine);
+  static AbstractInterpreter*
+  createCustomCompiler(std::string &Message,
+                       const std::string &CompileCommandLine);
+
+  static AbstractInterpreter*
+  createCustomExecutor(std::string &Message,
+                       const std::string &ExecCommandLine);
 
 
   virtual ~AbstractInterpreter() {}

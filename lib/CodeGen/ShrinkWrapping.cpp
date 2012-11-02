@@ -93,6 +93,7 @@ void PEI::getAnalysisUsage(AnalysisUsage &AU) const {
   }
   AU.addPreserved<MachineLoopInfo>();
   AU.addPreserved<MachineDominatorTree>();
+  AU.addRequired<TargetPassConfig>();
   MachineFunctionPass::getAnalysisUsage(AU);
 }
 
@@ -124,7 +125,7 @@ MachineLoop* PEI::getTopLevelLoopParent(MachineLoop *LP) {
 }
 
 bool PEI::isReturnBlock(MachineBasicBlock* MBB) {
-  return (MBB && !MBB->empty() && MBB->back().getDesc().isReturn());
+  return (MBB && !MBB->empty() && MBB->back().isReturn());
 }
 
 // Initialize shrink wrapping DFA sets, called before iterations.
@@ -158,7 +159,7 @@ void PEI::initShrinkWrappingInfo() {
   // via --shrink-wrap-func=<funcname>.
 #ifndef NDEBUG
   if (ShrinkWrapFunc != "") {
-    std::string MFName = MF->getFunction()->getNameStr();
+    std::string MFName = MF->getFunction()->getName().str();
     ShrinkWrapThisFunction = (MFName == ShrinkWrapFunc);
   }
 #endif
@@ -226,7 +227,7 @@ bool PEI::calcAnticInOut(MachineBasicBlock* MBB) {
   // AnticIn[MBB] = UNION(CSRUsed[MBB], AnticOut[MBB]);
   CSRegSet prevAnticIn = AnticIn[MBB];
   AnticIn[MBB] = CSRUsed[MBB] | AnticOut[MBB];
-  if (prevAnticIn |= AnticIn[MBB])
+  if (prevAnticIn != AnticIn[MBB])
     changed = true;
   return changed;
 }
@@ -264,7 +265,7 @@ bool PEI::calcAvailInOut(MachineBasicBlock* MBB) {
   // AvailOut[MBB] = UNION(CSRUsed[MBB], AvailIn[MBB]);
   CSRegSet prevAvailOut = AvailOut[MBB];
   AvailOut[MBB] = CSRUsed[MBB] | AvailIn[MBB];
-  if (prevAvailOut |= AvailOut[MBB])
+  if (prevAvailOut != AvailOut[MBB])
     changed = true;
   return changed;
 }
@@ -277,7 +278,7 @@ void PEI::calculateAnticAvail(MachineFunction &Fn) {
   // Initialize data flow sets.
   clearAnticAvailSets();
 
-  // Calulate Antic{In,Out} and Avail{In,Out} iteratively on the MCFG.
+  // Calculate Antic{In,Out} and Avail{In,Out} iteratively on the MCFG.
   bool changed = true;
   unsigned iterations = 0;
   while (changed) {
@@ -1045,7 +1046,7 @@ std::string PEI::getBasicBlockName(const MachineBasicBlock* MBB) {
     return "";
 
   if (MBB->getBasicBlock())
-    return MBB->getBasicBlock()->getNameStr();
+    return MBB->getBasicBlock()->getName().str();
 
   std::ostringstream name;
   name << "_MBB_" << MBB->getNumber();

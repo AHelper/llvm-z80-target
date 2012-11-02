@@ -1,5 +1,5 @@
 set(LLVM_LINK_COMPONENTS asmparser instrumentation scalaropts ipo
-  linker bitreader bitwriter)
+  linker bitreader bitwriter vectorize)
 
 add_llvm_tool(bugpoint
   BugDriver.cpp
@@ -9,7 +9,6 @@ add_llvm_tool(bugpoint
   FindBugs.cpp
   Miscompilation.cpp
   OptimizerDriver.cpp
-  TestPasses.cpp
   ToolRunner.cpp
   bugpoint.cpp
   )

@@ -23,10 +23,11 @@
 #include "llvm/CallGraphSCCPass.h"
 #include "llvm/GlobalVariable.h"
 #include "llvm/IntrinsicInst.h"
+#include "llvm/LLVMContext.h"
 #include "llvm/Analysis/AliasAnalysis.h"
 #include "llvm/Analysis/CallGraph.h"
 #include "llvm/Analysis/CaptureTracking.h"
-#include "llvm/Analysis/MemoryBuiltins.h"
+#include "llvm/ADT/SCCIterator.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/UniqueVector.h"
@@ -41,7 +42,9 @@ STATISTIC(NumNoAlias, "Number of function returns marked noalias");
 namespace {
   struct FunctionAttrs : public CallGraphSCCPass {
     static char ID; // Pass identification, replacement for typeid
-    FunctionAttrs() : CallGraphSCCPass(&ID) {}
+    FunctionAttrs() : CallGraphSCCPass(ID), AA(0) {
+      initializeFunctionAttrsPass(*PassRegistry::getPassRegistry());
+    }
 
     // runOnSCC - Analyze the SCC, performing the transformation if possible.
     bool runOnSCC(CallGraphSCC &SCC);
@@ -61,66 +64,24 @@ namespace {
 
     virtual void getAnalysisUsage(AnalysisUsage &AU) const {
       AU.setPreservesCFG();
+      AU.addRequired<AliasAnalysis>();
       CallGraphSCCPass::getAnalysisUsage(AU);
     }
 
-    bool PointsToLocalMemory(Value *V);
+  private:
+    AliasAnalysis *AA;
   };
 }
 
 char FunctionAttrs::ID = 0;
-static RegisterPass<FunctionAttrs>
-X("functionattrs", "Deduce function attributes");
+INITIALIZE_PASS_BEGIN(FunctionAttrs, "functionattrs",
+                "Deduce function attributes", false, false)
+INITIALIZE_AG_DEPENDENCY(CallGraph)
+INITIALIZE_PASS_END(FunctionAttrs, "functionattrs",
+                "Deduce function attributes", false, false)
 
 Pass *llvm::createFunctionAttrsPass() { return new FunctionAttrs(); }
 
-
-/// PointsToLocalMemory - Returns whether the given pointer value points to
-/// memory that is local to the function.  Global constants are considered
-/// local to all functions.
-bool FunctionAttrs::PointsToLocalMemory(Value *V) {
-  SmallVector<Value*, 16> Worklist;
-  unsigned MaxLookup = 8;
-
-  Worklist.push_back(V);
-
-  do {
-    V = Worklist.pop_back_val()->getUnderlyingObject();
-
-    // An alloca instruction defines local memory.
-    if (isa<AllocaInst>(V))
-      continue;
-
-    // A global constant counts as local memory for our purposes.
-    if (GlobalVariable *GV = dyn_cast<GlobalVariable>(V)) {
-      if (!GV->isConstant())
-        return false;
-      continue;
-    }
-
-    // If both select values point to local memory, then so does the select.
-    if (SelectInst *SI = dyn_cast<SelectInst>(V)) {
-      Worklist.push_back(SI->getTrueValue());
-      Worklist.push_back(SI->getFalseValue());
-      continue;
-    }
-
-    // If all values incoming to a phi node point to local memory, then so does
-    // the phi.
-    if (PHINode *PN = dyn_cast<PHINode>(V)) {
-      // Don't bother inspecting phi nodes with many operands.
-      if (PN->getNumIncomingValues() > MaxLookup)
-        return false;
-      for (unsigned i = 0, e = PN->getNumIncomingValues(); i != e; ++i)
-        Worklist.push_back(PN->getIncomingValue(i));
-      continue;
-    }
-
-    return false;
-  } while (!Worklist.empty() && --MaxLookup);
-
-  return Worklist.empty();
-}
 
 /// AddReadAttrs - Deduce readonly/readnone attributes for the SCC.
 bool FunctionAttrs::AddReadAttrs(const CallGraphSCC &SCC) {
@@ -141,14 +102,15 @@ bool FunctionAttrs::AddReadAttrs(const CallGraphSCC &SCC) {
       // External node - may write memory.  Just give up.
       return false;
 
-    if (F->doesNotAccessMemory())
+    AliasAnalysis::ModRefBehavior MRB = AA->getModRefBehavior(F);
+    if (MRB == AliasAnalysis::DoesNotAccessMemory)
       // Already perfect!
       continue;
 
     // Definitions with weak linkage may be overridden at linktime with
     // something that writes memory, so treat them like declarations.
     if (F->isDeclaration() || F->mayBeOverridden()) {
-      if (!F->onlyReadsMemory())
+      if (!AliasAnalysis::onlyReadsMemory(MRB))
         // May write memory.  Just give up.
         return false;
 
@@ -162,33 +124,63 @@ bool FunctionAttrs::AddReadAttrs(const CallGraphSCC &SCC) {
 
       // Some instructions can be ignored even if they read or write memory.
       // Detect these now, skipping to the next instruction if one is found.
-      CallSite CS = CallSite::get(I);
-      if (CS.getInstruction() && CS.getCalledFunction()) {
+      CallSite CS(cast<Value>(I));
+      if (CS) {
         // Ignore calls to functions in the same SCC.
-        if (SCCNodes.count(CS.getCalledFunction()))
+        if (CS.getCalledFunction() && SCCNodes.count(CS.getCalledFunction()))
           continue;
-        // Ignore intrinsics that only access local memory.
-        if (unsigned id = CS.getCalledFunction()->getIntrinsicID())
-          if (AliasAnalysis::getModRefBehavior(id) ==
-              AliasAnalysis::AccessesArguments) {
-            // Check that all pointer arguments point to local memory.
+        AliasAnalysis::ModRefBehavior MRB = AA->getModRefBehavior(CS);
+        // If the call doesn't access arbitrary memory, we may be able to
+        // figure out something.
+        if (AliasAnalysis::onlyAccessesArgPointees(MRB)) {
+          // If the call does access argument pointees, check each argument.
+          if (AliasAnalysis::doesAccessArgPointees(MRB))
+            // Check whether all pointer arguments point to local memory, and
+            // ignore calls that only access local memory.
             for (CallSite::arg_iterator CI = CS.arg_begin(), CE = CS.arg_end();
                  CI != CE; ++CI) {
               Value *Arg = *CI;
-              if (Arg->getType()->isPointerTy() && !PointsToLocalMemory(Arg))
-                // Writes memory.  Just give up.
-                return false;
+              if (Arg->getType()->isPointerTy()) {
+                AliasAnalysis::Location Loc(Arg,
+                                            AliasAnalysis::UnknownSize,
+                                            I->getMetadata(LLVMContext::MD_tbaa));
+                if (!AA->pointsToConstantMemory(Loc, /*OrLocal=*/true)) {
+                  if (MRB & AliasAnalysis::Mod)
+                    // Writes non-local memory.  Give up.
+                    return false;
+                  if (MRB & AliasAnalysis::Ref)
+                    // Ok, it reads non-local memory.
+                    ReadsMemory = true;
+                }
+              }
             }
-            // Only reads and writes local memory.
-            continue;
-          }
-      } else if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
-        // Ignore loads from local memory.
-        if (PointsToLocalMemory(LI->getPointerOperand()))
           continue;
+        }
+        // The call could access any memory. If that includes writes, give up.
+        if (MRB & AliasAnalysis::Mod)
+          return false;
+        // If it reads, note it.
+        if (MRB & AliasAnalysis::Ref)
+          ReadsMemory = true;
+        continue;
+      } else if (LoadInst *LI = dyn_cast<LoadInst>(I)) {
+        // Ignore non-volatile loads from local memory. (Atomic is okay here.)
+        if (!LI->isVolatile()) {
+          AliasAnalysis::Location Loc = AA->getLocation(LI);
+          if (AA->pointsToConstantMemory(Loc, /*OrLocal=*/true))
+            continue;
+        }
       } else if (StoreInst *SI = dyn_cast<StoreInst>(I)) {
-        // Ignore stores to local memory.
-        if (PointsToLocalMemory(SI->getPointerOperand()))
+        // Ignore non-volatile stores to local memory. (Atomic is okay here.)
+        if (!SI->isVolatile()) {
+          AliasAnalysis::Location Loc = AA->getLocation(SI);
+          if (AA->pointsToConstantMemory(Loc, /*OrLocal=*/true))
+            continue;
+        }
+      } else if (VAArgInst *VI = dyn_cast<VAArgInst>(I)) {
+        // Ignore vaargs on local memory.
+        AliasAnalysis::Location Loc = AA->getLocation(VI);
+        if (AA->pointsToConstantMemory(Loc, /*OrLocal=*/true))
           continue;
       }
 
@@ -196,10 +188,6 @@ bool FunctionAttrs::AddReadAttrs(const CallGraphSCC &SCC) {
       // read or write memory.
       if (I->mayWriteToMemory())
         // Writes memory.  Just give up.
-        return false;
-
-      if (isMalloc(I))
-        // malloc claims not to write memory!  PR3754.
         return false;
 
       // If this instruction may read memory, remember that.
@@ -238,9 +226,131 @@ bool FunctionAttrs::AddReadAttrs(const CallGraphSCC &SCC) {
   return MadeChange;
 }
 
+namespace {
+  // For a given pointer Argument, this retains a list of Arguments of functions
+  // in the same SCC that the pointer data flows into. We use this to build an
+  // SCC of the arguments.
+  struct ArgumentGraphNode {
+    Argument *Definition;
+    SmallVector<ArgumentGraphNode*, 4> Uses;
+  };
+
+  class ArgumentGraph {
+    // We store pointers to ArgumentGraphNode objects, so it's important that
+    // that they not move around upon insert.
+    typedef std::map<Argument*, ArgumentGraphNode> ArgumentMapTy;
+
+    ArgumentMapTy ArgumentMap;
+
+    // There is no root node for the argument graph, in fact:
+    //   void f(int *x, int *y) { if (...) f(x, y); }
+    // is an example where the graph is disconnected. The SCCIterator requires a
+    // single entry point, so we maintain a fake ("synthetic") root node that
+    // uses every node. Because the graph is directed and nothing points into
+    // the root, it will not participate in any SCCs (except for its own).
+    ArgumentGraphNode SyntheticRoot;
+
+  public:
+    ArgumentGraph() { SyntheticRoot.Definition = 0; }
+
+    typedef SmallVectorImpl<ArgumentGraphNode*>::iterator iterator;
+
+    iterator begin() { return SyntheticRoot.Uses.begin(); }
+    iterator end() { return SyntheticRoot.Uses.end(); }
+    ArgumentGraphNode *getEntryNode() { return &SyntheticRoot; }
+
+    ArgumentGraphNode *operator[](Argument *A) {
+      ArgumentGraphNode &Node = ArgumentMap[A];
+      Node.Definition = A;
+      SyntheticRoot.Uses.push_back(&Node);
+      return &Node;
+    }
+  };
+
+  // This tracker checks whether callees are in the SCC, and if so it does not
+  // consider that a capture, instead adding it to the "Uses" list and
+  // continuing with the analysis.
+  struct ArgumentUsesTracker : public CaptureTracker {
+    ArgumentUsesTracker(const SmallPtrSet<Function*, 8> &SCCNodes)
+      : Captured(false), SCCNodes(SCCNodes) {}
+
+    void tooManyUses() { Captured = true; }
+
+    bool shouldExplore(Use *U) { return true; }
+
+    bool captured(Use *U) {
+      CallSite CS(U->getUser());
+      if (!CS.getInstruction()) { Captured = true; return true; }
+
+      Function *F = CS.getCalledFunction();
+      if (!F || !SCCNodes.count(F)) { Captured = true; return true; }
+
+      Function::arg_iterator AI = F->arg_begin(), AE = F->arg_end();
+      for (CallSite::arg_iterator PI = CS.arg_begin(), PE = CS.arg_end();
+           PI != PE; ++PI, ++AI) {
+        if (AI == AE) {
+          assert(F->isVarArg() && "More params than args in non-varargs call");
+          Captured = true;
+          return true;
+        }
+        if (PI == U) {
+          Uses.push_back(AI);
+          break;
+        }
+      }
+      assert(!Uses.empty() && "Capturing call-site captured nothing?");
+      return false;
+    }
+
+    bool Captured;  // True only if certainly captured (used outside our SCC).
+    SmallVector<Argument*, 4> Uses;  // Uses within our SCC.
+
+    const SmallPtrSet<Function*, 8> &SCCNodes;
+  };
+}
+
+namespace llvm {
+  template<> struct GraphTraits<ArgumentGraphNode*> {
+    typedef ArgumentGraphNode NodeType;
+    typedef SmallVectorImpl<ArgumentGraphNode*>::iterator ChildIteratorType;
+
+    static inline NodeType *getEntryNode(NodeType *A) { return A; }
+    static inline ChildIteratorType child_begin(NodeType *N) {
+      return N->Uses.begin();
+    }
+    static inline ChildIteratorType child_end(NodeType *N) {
+      return N->Uses.end();
+    }
+  };
+  template<> struct GraphTraits<ArgumentGraph*>
+    : public GraphTraits<ArgumentGraphNode*> {
+    static NodeType *getEntryNode(ArgumentGraph *AG) {
+      return AG->getEntryNode();
+    }
+    static ChildIteratorType nodes_begin(ArgumentGraph *AG) {
+      return AG->begin();
+    }
+    static ChildIteratorType nodes_end(ArgumentGraph *AG) {
+      return AG->end();
+    }
+  };
+}
+
 /// AddNoCaptureAttrs - Deduce nocapture attributes for the SCC.
 bool FunctionAttrs::AddNoCaptureAttrs(const CallGraphSCC &SCC) {
   bool Changed = false;
+
+  SmallPtrSet<Function*, 8> SCCNodes;
+
+  // Fill SCCNodes with the elements of the SCC.  Used for quickly
+  // looking up whether a given CallGraphNode is in this SCC.
+  for (CallGraphSCC::iterator I = SCC.begin(), E = SCC.end(); I != E; ++I) {
+    Function *F = (*I)->getFunction();
+    if (F && !F->isDeclaration() && !F->mayBeOverridden())
+      SCCNodes.insert(F);
+  }
+
+  ArgumentGraph AG;
 
   // Check each function in turn, determining which pointer arguments are not
   // captured.
@@ -248,21 +358,115 @@ bool FunctionAttrs::AddNoCaptureAttrs(const CallGraphSCC &SCC) {
     Function *F = (*I)->getFunction();
 
     if (F == 0)
-      // External node - skip it;
+      // External node - only a problem for arguments that we pass to it.
       continue;
 
     // Definitions with weak linkage may be overridden at linktime with
-    // something that writes memory, so treat them like declarations.
+    // something that captures pointers, so treat them like declarations.
     if (F->isDeclaration() || F->mayBeOverridden())
       continue;
 
+    // Functions that are readonly (or readnone) and nounwind and don't return
+    // a value can't capture arguments. Don't analyze them.
+    if (F->onlyReadsMemory() && F->doesNotThrow() &&
+        F->getReturnType()->isVoidTy()) {
+      for (Function::arg_iterator A = F->arg_begin(), E = F->arg_end();
+           A != E; ++A) {
+        if (A->getType()->isPointerTy() && !A->hasNoCaptureAttr()) {
+          A->addAttr(Attribute::NoCapture);
+          ++NumNoCapture;
+          Changed = true;
+        }
+      }
+      continue;
+    }
+
     for (Function::arg_iterator A = F->arg_begin(), E = F->arg_end(); A!=E; ++A)
-      if (A->getType()->isPointerTy() && !A->hasNoCaptureAttr() &&
-          !PointerMayBeCaptured(A, true, /*StoreCaptures=*/false)) {
-        A->addAttr(Attribute::NoCapture);
+      if (A->getType()->isPointerTy() && !A->hasNoCaptureAttr()) {
+        ArgumentUsesTracker Tracker(SCCNodes);
+        PointerMayBeCaptured(A, &Tracker);
+        if (!Tracker.Captured) {
+          if (Tracker.Uses.empty()) {
+            // If it's trivially not captured, mark it nocapture now.
+            A->addAttr(Attribute::NoCapture);
+            ++NumNoCapture;
+            Changed = true;
+          } else {
+            // If it's not trivially captured and not trivially not captured,
+            // then it must be calling into another function in our SCC. Save
+            // its particulars for Argument-SCC analysis later.
+            ArgumentGraphNode *Node = AG[A];
+            for (SmallVectorImpl<Argument*>::iterator UI = Tracker.Uses.begin(),
+                   UE = Tracker.Uses.end(); UI != UE; ++UI)
+              Node->Uses.push_back(AG[*UI]);
+          }
+        }
+        // Otherwise, it's captured. Don't bother doing SCC analysis on it.
+      }
+  }
+
+  // The graph we've collected is partial because we stopped scanning for
+  // argument uses once we solved the argument trivially. These partial nodes
+  // show up as ArgumentGraphNode objects with an empty Uses list, and for
+  // these nodes the final decision about whether they capture has already been
+  // made.  If the definition doesn't have a 'nocapture' attribute by now, it
+  // captures.
+
+  for (scc_iterator<ArgumentGraph*> I = scc_begin(&AG), E = scc_end(&AG);
+       I != E; ++I) {
+    std::vector<ArgumentGraphNode*> &ArgumentSCC = *I;
+    if (ArgumentSCC.size() == 1) {
+      if (!ArgumentSCC[0]->Definition) continue;  // synthetic root node
+
+      // eg. "void f(int* x) { if (...) f(x); }"
+      if (ArgumentSCC[0]->Uses.size() == 1 &&
+          ArgumentSCC[0]->Uses[0] == ArgumentSCC[0]) {
+        ArgumentSCC[0]->Definition->addAttr(Attribute::NoCapture);
         ++NumNoCapture;
         Changed = true;
       }
+      continue;
+    }
+
+    bool SCCCaptured = false;
+    for (std::vector<ArgumentGraphNode*>::iterator I = ArgumentSCC.begin(),
+           E = ArgumentSCC.end(); I != E && !SCCCaptured; ++I) {
+      ArgumentGraphNode *Node = *I;
+      if (Node->Uses.empty()) {
+        if (!Node->Definition->hasNoCaptureAttr())
+          SCCCaptured = true;
+      }
+    }
+    if (SCCCaptured) continue;
+
+    SmallPtrSet<Argument*, 8> ArgumentSCCNodes;
+    // Fill ArgumentSCCNodes with the elements of the ArgumentSCC.  Used for
+    // quickly looking up whether a given Argument is in this ArgumentSCC.
+    for (std::vector<ArgumentGraphNode*>::iterator I = ArgumentSCC.begin(),
+           E = ArgumentSCC.end(); I != E; ++I) {
+      ArgumentSCCNodes.insert((*I)->Definition);
+    }
+
+    for (std::vector<ArgumentGraphNode*>::iterator I = ArgumentSCC.begin(),
+           E = ArgumentSCC.end(); I != E && !SCCCaptured; ++I) {
+      ArgumentGraphNode *N = *I;
+      for (SmallVectorImpl<ArgumentGraphNode*>::iterator UI = N->Uses.begin(),
+             UE = N->Uses.end(); UI != UE; ++UI) {
+        Argument *A = (*UI)->Definition;
+        if (A->hasNoCaptureAttr() || ArgumentSCCNodes.count(A))
+          continue;
+        SCCCaptured = true;
+        break;
+      }
+    }
+    if (SCCCaptured) continue;
+
+    for (unsigned i = 0, e = ArgumentSCC.size(); i != e; ++i) {
+      Argument *A = ArgumentSCC[i]->Definition;
+      A->addAttr(Attribute::NoCapture);
+      ++NumNoCapture;
+      Changed = true;
+    }
   }
 
   return Changed;
@@ -384,6 +588,8 @@ bool FunctionAttrs::AddNoAliasAttrs(const CallGraphSCC &SCC) {
 }
 
 bool FunctionAttrs::runOnSCC(CallGraphSCC &SCC) {
+  AA = &getAnalysis<AliasAnalysis>();
+
   bool Changed = AddReadAttrs(SCC);
   Changed |= AddNoCaptureAttrs(SCC);
   Changed |= AddNoAliasAttrs(SCC);

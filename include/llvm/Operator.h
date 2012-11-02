@@ -15,8 +15,9 @@
 #ifndef LLVM_OPERATOR_H
 #define LLVM_OPERATOR_H
 
-#include "llvm/Instruction.h"
 #include "llvm/Constants.h"
+#include "llvm/Instruction.h"
+#include "llvm/Type.h"
 
 namespace llvm {
 
@@ -99,19 +100,21 @@ public:
   /// hasNoSignedWrap - Test whether this operation is known to never
   /// undergo signed overflow, aka the nsw property.
   bool hasNoSignedWrap() const {
-    return SubclassOptionalData & NoSignedWrap;
+    return (SubclassOptionalData & NoSignedWrap) != 0;
   }
 
   static inline bool classof(const OverflowingBinaryOperator *) { return true; }
   static inline bool classof(const Instruction *I) {
     return I->getOpcode() == Instruction::Add ||
            I->getOpcode() == Instruction::Sub ||
-           I->getOpcode() == Instruction::Mul;
+           I->getOpcode() == Instruction::Mul ||
+           I->getOpcode() == Instruction::Shl;
   }
   static inline bool classof(const ConstantExpr *CE) {
     return CE->getOpcode() == Instruction::Add ||
            CE->getOpcode() == Instruction::Sub ||
-           CE->getOpcode() == Instruction::Mul;
+           CE->getOpcode() == Instruction::Mul ||
+           CE->getOpcode() == Instruction::Shl;
   }
   static inline bool classof(const Value *V) {
     return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
@@ -119,91 +122,41 @@ public:
   }
 };
 
-/// AddOperator - Utility class for integer addition operators.
-///
-class AddOperator : public OverflowingBinaryOperator {
-  ~AddOperator(); // do not implement
-public:
-  static inline bool classof(const AddOperator *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::Add;
-  }
-  static inline bool classof(const ConstantExpr *CE) {
-    return CE->getOpcode() == Instruction::Add;
-  }
-  static inline bool classof(const Value *V) {
-    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
-           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
-  }
-};
-
-/// SubOperator - Utility class for integer subtraction operators.
-///
-class SubOperator : public OverflowingBinaryOperator {
-  ~SubOperator(); // do not implement
-public:
-  static inline bool classof(const SubOperator *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::Sub;
-  }
-  static inline bool classof(const ConstantExpr *CE) {
-    return CE->getOpcode() == Instruction::Sub;
-  }
-  static inline bool classof(const Value *V) {
-    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
-           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
-  }
-};
-
-/// MulOperator - Utility class for integer multiplication operators.
-///
-class MulOperator : public OverflowingBinaryOperator {
-  ~MulOperator(); // do not implement
-public:
-  static inline bool classof(const MulOperator *) { return true; }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::Mul;
-  }
-  static inline bool classof(const ConstantExpr *CE) {
-    return CE->getOpcode() == Instruction::Mul;
-  }
-  static inline bool classof(const Value *V) {
-    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
-           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
-  }
-};
-
-/// SDivOperator - An Operator with opcode Instruction::SDiv.
-///
-class SDivOperator : public Operator {
+/// PossiblyExactOperator - A udiv or sdiv instruction, which can be marked as
+/// "exact", indicating that no bits are destroyed.
+class PossiblyExactOperator : public Operator {
 public:
   enum {
     IsExact = (1 << 0)
   };
-
+  
 private:
-  ~SDivOperator(); // do not implement
+  ~PossiblyExactOperator(); // do not implement
 
   friend class BinaryOperator;
   friend class ConstantExpr;
   void setIsExact(bool B) {
     SubclassOptionalData = (SubclassOptionalData & ~IsExact) | (B * IsExact);
   }
-
+  
 public:
   /// isExact - Test whether this division is known to be exact, with
   /// zero remainder.
   bool isExact() const {
     return SubclassOptionalData & IsExact;
   }
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const SDivOperator *) { return true; }
+  
+  static bool isPossiblyExactOpcode(unsigned OpC) {
+    return OpC == Instruction::SDiv ||
+           OpC == Instruction::UDiv ||
+           OpC == Instruction::AShr ||
+           OpC == Instruction::LShr;
+  }
   static inline bool classof(const ConstantExpr *CE) {
-    return CE->getOpcode() == Instruction::SDiv;
+    return isPossiblyExactOpcode(CE->getOpcode());
   }
   static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::SDiv;
+    return isPossiblyExactOpcode(I->getOpcode());
   }
   static inline bool classof(const Value *V) {
     return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
@@ -211,12 +164,94 @@ public:
   }
 };
 
-class GEPOperator : public Operator {
+/// FPMathOperator - Utility class for floating point operations which can have
+/// information about relaxed accuracy requirements attached to them.
+class FPMathOperator : public Operator {
+private:
+  ~FPMathOperator(); // do not implement
+
+public:
+
+  /// \brief Get the maximum error permitted by this operation in ULPs.  An
+  /// accuracy of 0.0 means that the operation should be performed with the
+  /// default precision.
+  float getFPAccuracy() const;
+
+  static inline bool classof(const FPMathOperator *) { return true; }
+  static inline bool classof(const Instruction *I) {
+    return I->getType()->isFPOrFPVectorTy();
+  }
+  static inline bool classof(const Value *V) {
+    return isa<Instruction>(V) && classof(cast<Instruction>(V));
+  }
+};
+
+  
+/// ConcreteOperator - A helper template for defining operators for individual
+/// opcodes.
+template<typename SuperClass, unsigned Opc>
+class ConcreteOperator : public SuperClass {
+  ~ConcreteOperator(); // DO NOT IMPLEMENT
+public:
+  static inline bool classof(const ConcreteOperator<SuperClass, Opc> *) {
+    return true;
+  }
+  static inline bool classof(const Instruction *I) {
+    return I->getOpcode() == Opc;
+  }
+  static inline bool classof(const ConstantExpr *CE) {
+    return CE->getOpcode() == Opc;
+  }
+  static inline bool classof(const Value *V) {
+    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
+           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
+  }
+};
+
+class AddOperator
+  : public ConcreteOperator<OverflowingBinaryOperator, Instruction::Add> {
+  ~AddOperator(); // DO NOT IMPLEMENT
+};
+class SubOperator
+  : public ConcreteOperator<OverflowingBinaryOperator, Instruction::Sub> {
+  ~SubOperator(); // DO NOT IMPLEMENT
+};
+class MulOperator
+  : public ConcreteOperator<OverflowingBinaryOperator, Instruction::Mul> {
+  ~MulOperator(); // DO NOT IMPLEMENT
+};
+class ShlOperator
+  : public ConcreteOperator<OverflowingBinaryOperator, Instruction::Shl> {
+  ~ShlOperator(); // DO NOT IMPLEMENT
+};
+
+  
+class SDivOperator
+  : public ConcreteOperator<PossiblyExactOperator, Instruction::SDiv> {
+  ~SDivOperator(); // DO NOT IMPLEMENT
+};
+class UDivOperator
+  : public ConcreteOperator<PossiblyExactOperator, Instruction::UDiv> {
+  ~UDivOperator(); // DO NOT IMPLEMENT
+};
+class AShrOperator
+  : public ConcreteOperator<PossiblyExactOperator, Instruction::AShr> {
+  ~AShrOperator(); // DO NOT IMPLEMENT
+};
+class LShrOperator
+  : public ConcreteOperator<PossiblyExactOperator, Instruction::LShr> {
+  ~LShrOperator(); // DO NOT IMPLEMENT
+};
+  
+  
+  
+class GEPOperator
+  : public ConcreteOperator<Operator, Instruction::GetElementPtr> {
+  ~GEPOperator(); // DO NOT IMPLEMENT
+
   enum {
     IsInBounds = (1 << 0)
   };
-
-  ~GEPOperator(); // do not implement
 
   friend class GetElementPtrInst;
   friend class ConstantExpr;
@@ -249,8 +284,8 @@ public:
 
   /// getPointerOperandType - Method to return the pointer operand as a
   /// PointerType.
-  const PointerType *getPointerOperandType() const {
-    return reinterpret_cast<const PointerType*>(getPointerOperand()->getType());
+  Type *getPointerOperandType() const {
+    return getPointerOperand()->getType();
   }
 
   unsigned getNumIndices() const {  // Note: always non-negative
@@ -266,8 +301,8 @@ public:
   /// value, just potentially different types.
   bool hasAllZeroIndices() const {
     for (const_op_iterator I = idx_begin(), E = idx_end(); I != E; ++I) {
-      if (Constant *C = dyn_cast<Constant>(I))
-        if (C->isNullValue())
+      if (ConstantInt *C = dyn_cast<ConstantInt>(I))
+        if (C->isZero())
           continue;
       return false;
     }
@@ -283,21 +318,6 @@ public:
         return false;
     }
     return true;
-  }
-  
-
-  // Methods for support type inquiry through isa, cast, and dyn_cast:
-  static inline bool classof(const GEPOperator *) { return true; }
-  static inline bool classof(const GetElementPtrInst *) { return true; }
-  static inline bool classof(const ConstantExpr *CE) {
-    return CE->getOpcode() == Instruction::GetElementPtr;
-  }
-  static inline bool classof(const Instruction *I) {
-    return I->getOpcode() == Instruction::GetElementPtr;
-  }
-  static inline bool classof(const Value *V) {
-    return (isa<Instruction>(V) && classof(cast<Instruction>(V))) ||
-           (isa<ConstantExpr>(V) && classof(cast<ConstantExpr>(V)));
   }
 };
 

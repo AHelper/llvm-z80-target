@@ -1,6 +1,6 @@
 // This test describes how we eventually want to describe instructions in
 // the target independent code generators.
-// RUN: tblgen %s
+// RUN: llvm-tblgen %s
 // XFAIL: vg_leak
 
 // Target indep stuff.
@@ -83,8 +83,7 @@ class Inst<dag opnds, string asmstr, bits<8> opcode,
 //     the pattern.
 //  6. Address expressions should become first-class entities.
 
-// Simple copy instruction.  isMoveInstr could easily be inferred from this,
-// as could TargetRegisterInfo::copyRegToReg.
+// Simple copy instruction.
 def MOV8rr : Inst<(ops R8:$dst, R8:$src),
                   "mov $dst, $src", 0x88, MRMDestReg,
                   [(set R8:$dst, R8:$src)]>;
@@ -111,7 +110,7 @@ def SHL32rCL : Inst<(ops R32:$dst, R32:$src),
                   [(set R32:$dst, (shl R32:$src, CL))]>;
 
 // The RTL list is a list, allowing complex instructions to be defined easily.
-// Temporary 'internal' registers can be used to break instructions appart.
+// Temporary 'internal' registers can be used to break instructions apart.
 let isTwoAddress = 1 in
 def XOR32mi : Inst<(ops addr:$addr, imm32:$imm),
                    "xor $dst, $src2", 0x81, MRM6m,

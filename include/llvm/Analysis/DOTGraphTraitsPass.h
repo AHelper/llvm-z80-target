@@ -22,7 +22,7 @@ template <class Analysis, bool Simple>
 struct DOTGraphTraitsViewer : public FunctionPass {
   std::string Name;
 
-  DOTGraphTraitsViewer(std::string GraphName, const void *ID) : FunctionPass(ID) {
+  DOTGraphTraitsViewer(std::string GraphName, char &ID) : FunctionPass(ID) {
     Name = GraphName;
   }
 
@@ -31,7 +31,7 @@ struct DOTGraphTraitsViewer : public FunctionPass {
     std::string Title, GraphName;
     Graph = &getAnalysis<Analysis>();
     GraphName = DOTGraphTraits<Analysis*>::getGraphName(Graph);
-    Title = GraphName + " for '" + F.getNameStr() + "' function";
+    Title = GraphName + " for '" + F.getName().str() + "' function";
     ViewGraph(Graph, Name, Simple, Title);
 
     return false;
@@ -48,14 +48,14 @@ struct DOTGraphTraitsPrinter : public FunctionPass {
 
   std::string Name;
 
-  DOTGraphTraitsPrinter(std::string GraphName, const void *ID)
+  DOTGraphTraitsPrinter(std::string GraphName, char &ID)
     : FunctionPass(ID) {
     Name = GraphName;
   }
 
   virtual bool runOnFunction(Function &F) {
     Analysis *Graph;
-    std::string Filename = Name + "." + F.getNameStr() + ".dot";
+    std::string Filename = Name + "." + F.getName().str() + ".dot";
     errs() << "Writing '" << Filename << "'...";
 
     std::string ErrorInfo;
@@ -64,10 +64,10 @@ struct DOTGraphTraitsPrinter : public FunctionPass {
 
     std::string Title, GraphName;
     GraphName = DOTGraphTraits<Analysis*>::getGraphName(Graph);
-    Title = GraphName + " for '" + F.getNameStr() + "' function";
+    Title = GraphName + " for '" + F.getName().str() + "' function";
 
     if (ErrorInfo.empty())
-      WriteGraph(File, Graph, Simple, Name, Title);
+      WriteGraph(File, Graph, Simple, Title);
     else
       errs() << "  error opening file for writing!";
     errs() << "\n";

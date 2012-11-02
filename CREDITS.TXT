@@ -8,6 +8,7 @@ beautification by scripts.  The fields are: name (N), email (E), web-address
 (W), PGP key ID and fingerprint (P), description (D), and snail-mail address
 (S).
 
+
 N: Vikram Adve
 E: vadve@cs.uiuc.edu
 W: http://www.cs.uiuc.edu/~vadve/
@@ -31,6 +32,10 @@ E: dberlin@dberlin.org
 D: ET-Forest implementation.
 D: Sparse bitmap
 
+N: David Blaikie
+E: dblaikie@gmail.com
+D: General bug fixing/fit & finish, mostly in Clang
+
 N: Neil Booth
 E: neil@daikokuya.co.uk
 D: APFloat implementation.
@@ -39,15 +44,21 @@ N: Misha Brukman
 E: brukman+llvm@uiuc.edu
 W: http://misha.brukman.net
 D: Portions of X86 and Sparc JIT compilers, PowerPC backend
-D: Incremental bytecode loader
+D: Incremental bitcode loader
 
 N: Cameron Buschardt
 E: buschard@uiuc.edu
 D: The `mem2reg' pass - promotes values stored in memory to registers
 
+N: Brendon Cahoon
+E: bcahoon@codeaurora.org
+D: Loop unrolling with run-time trip counts.
+
 N: Chandler Carruth
 E: chandlerc@gmail.com
-D: LinkTimeOptimizer for Linux, via binutils integration, and C API
+D: Hashing algorithms and interfaces
+D: Inline cost analysis
+D: Machine block placement pass
 
 N: Casey Carter
 E: ccarter@uiuc.edu
@@ -78,6 +89,10 @@ N: John T. Criswell
 E: criswell@uiuc.edu
 D: Original Autoconf support, documentation improvements, bug fixes
 
+N: Anshuman Dasgupta
+E: adasgupt@codeaurora.org
+D: Deterministic finite automaton based infrastructure for VLIW packetization
+
 N: Stefanus Du Toit
 E: stefanus.dutoit@rapidmind.com
 D: Bug fixes and minor improvements
@@ -89,6 +104,10 @@ D: The ARM backend
 N: Alkis Evlogimenos
 E: alkis@evlogimenos.com
 D: Linear scan register allocator, many codegen improvements, Java frontend
+
+N: Hal Finkel
+E: hfinkel@anl.gov
+D: Basic-block autovectorization, PowerPC backend improvements
 
 N: Ryan Flynn
 E: pizza@parseerror.com
@@ -133,6 +152,13 @@ D: Register allocation refactoring
 N: Gabor Greif
 E: ggreif@gmail.com
 D: Improvements for space efficiency
+
+N: James Grosbach
+E: grosbach@apple.com
+D: SjLj exception handling support
+D: General fixes and improvements for the ARM back-end
+D: MCJIT
+D: ARM integrated assembler and assembly parser
 
 N: Lang Hames
 E: lhames@gmail.com
@@ -190,6 +216,10 @@ N: Benjamin Kramer
 E: benny.kra@gmail.com
 D: Miscellaneous bug fixes
 
+N: Sundeep Kushwaha
+E: sundeepk@codeaurora.org
+D: Implemented DFA-based target independent VLIW packetizer
+
 N: Christopher Lamb
 E: christopher.lamb@gmail.com
 D: aligned load/store support, parts of noalias and restrict support
@@ -225,6 +255,10 @@ N: Nick Lewycky
 E: nicholas@mxc.ca
 D: PredicateSimplifier pass
 
+N: Tony Linthicum, et. al.
+E: tlinth@codeaurora.org
+D: Backend for Qualcomm's Hexagon VLIW processor.
+
 N: Bruno Cardoso Lopes
 E: bruno.cardoso@gmail.com
 W: http://www.brunocardoso.org
@@ -234,6 +268,10 @@ N: Duraid Madina
 E: duraid@octopus.com.au
 W: http://kinoko.c.u-tokyo.ac.jp/~duraid/
 D: IA64 backend, BigBlock register allocator
+
+N: John McCall
+E: rjmccall@apple.com
+D: Clang semantic analysis and IR generation
 
 N: Michael McCracken
 E: michael.mccracken@gmail.com
@@ -246,6 +284,17 @@ D: Test suite fixes for FreeBSD
 N: Scott Michel
 E: scottm@aero.org
 D: Added STI Cell SPU backend.
+
+N: Kai Nacke
+E: kai@redstar.de
+D: Support for implicit TLS model used with MS VC runtime
+
+N: Takumi Nakamura
+E: geek4civic@gmail.com
+E: chapuni@hf.rim.or.jp
+D: Cygwin and MinGW support.
+D: Win32 tweaks.
+S: Yokohama, Japan
 
 N: Edward O'Callaghan
 E: eocallaghan@auroraux.org
@@ -262,6 +311,8 @@ N: Jakob Stoklund Olesen
 E: stoklund@2pi.dk
 D: Machine code verifier
 D: Blackfin backend
+D: Fast register allocator
+D: Greedy register allocator
 
 N: Richard Osborne
 E: richard@xmos.com
@@ -277,10 +328,32 @@ N: Sandeep Patel
 E: deeppatel1987@gmail.com
 D: ARM calling conventions rewrite, hard float support
 
+N: Wesley Peck
+E: peckw@wesleypeck.com
+W: http://wesleypeck.com/
+D: MicroBlaze backend
+
+N: Francois Pichet
+E: pichet2000@gmail.com
+D: MSVC support
+
 N: Vladimir Prus
 W: http://vladimir_prus.blogspot.com
 E: ghost@cs.msu.su
 D: Made inst_iterator behave like a proper iterator, LowerConstantExprs pass
+
+N: Xerxes Ranby
+E: xerxes@zafena.se
+D: Cmake dependency chain and various bug fixes
+
+N: Chad Rosier
+E: mcrosier@apple.com
+D: ARM fast-isel improvements
+D: Performance monitoring
+
+N: Nadav Rotem
+E: nadav.rotem@intel.com
+D: Vector code generation improvements.
 
 N: Roman Samoilov
 E: roman@codedgers.com
@@ -288,7 +361,10 @@ D: MSIL backend
 
 N: Duncan Sands
 E: baldrick@free.fr
-D: Ada front-end, exception handling improvements
+D: Ada support in llvm-gcc
+D: Dragonegg plugin
+D: Exception handling improvements
+D: Type legalizer rewrite
 
 N: Ruchira Sasanka
 E: sasanka@uiuc.edu
@@ -305,6 +381,11 @@ D: Miscellaneous bug fixes
 N: Anand Shukla
 E: ashukla@cs.uiuc.edu
 D: The `paths' pass
+
+N: Michael J. Spencer
+E: bigcheesegs@gmail.com
+D: Shepherding Windows COFF support into MC.
+D: Lots of Windows stuff.
 
 N: Reid Spencer
 E: rspencer@reidspencer.com
@@ -324,19 +405,11 @@ E: lauro.venancio@indt.org.br
 D: ARM backend improvements
 D: Thread Local Storage implementation
 
-N: Xerxes Ranby
-E: xerxes@zafena.se
-D: Cmake dependency chain and various bug fixes
-
 N: Bill Wendling
-E: isanbard@gmail.com
+E: wendling@apple.com
+D: Exception handling
 D: Bunches of stuff
 
 N: Bob Wilson
 E: bob.wilson@acm.org
 D: Advanced SIMD (NEON) support in the ARM backend
-
-N: Wesley Peck
-E: peckw@wesleypeck.com
-W: http://wesleypeck.com/
-D: MicroBlaze backend

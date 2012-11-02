@@ -14,14 +14,18 @@
 #ifndef LLVM_TRANSFORMS_UTILS_SSAUPDATER_H
 #define LLVM_TRANSFORMS_UTILS_SSAUPDATER_H
 
+#include "llvm/ADT/StringRef.h"
+
 namespace llvm {
-  class Value;
   class BasicBlock;
-  class Use;
-  class PHINode;
+  class Instruction;
+  class LoadInst;
   template<typename T> class SmallVectorImpl;
   template<typename T> class SSAUpdaterTraits;
-  class BumpPtrAllocator;
+  class PHINode;
+  class Type;
+  class Use;
+  class Value;
 
 /// SSAUpdater - This class updates SSA form for a set of values defined in
 /// multiple blocks.  This is used when code duplication or another unstructured
@@ -36,9 +40,11 @@ private:
   //typedef DenseMap<BasicBlock*, Value*> AvailableValsTy;
   void *AV;
 
-  /// PrototypeValue is an arbitrary representative value, which we derive names
-  /// and a type for PHI nodes.
-  Value *PrototypeValue;
+  /// ProtoType holds the type of the values being rewritten.
+  Type *ProtoType;
+
+  // PHI nodes are given a name based on ProtoName.
+  std::string ProtoName;
 
   /// InsertedPHIs - If this is non-null, the SSAUpdater adds all PHI nodes that
   /// it creates to the vector.
@@ -51,8 +57,8 @@ public:
   ~SSAUpdater();
 
   /// Initialize - Reset this object to get ready for a new set of SSA
-  /// updates.  ProtoValue is the value used to name PHI nodes.
-  void Initialize(Value *ProtoValue);
+  /// updates with type 'Ty'.  PHI nodes get a name based on 'Name'.
+  void Initialize(Type *Ty, StringRef Name);
 
   /// AddAvailableValue - Indicate that a rewritten value is available at the
   /// end of the specified block with the specified value.
@@ -94,11 +100,65 @@ public:
   /// for the use's block will be considered to be below it.
   void RewriteUse(Use &U);
 
+  /// RewriteUseAfterInsertions - Rewrite a use, just like RewriteUse.  However,
+  /// this version of the method can rewrite uses in the same block as a
+  /// definition, because it assumes that all uses of a value are below any
+  /// inserted values.
+  void RewriteUseAfterInsertions(Use &U);
+
 private:
   Value *GetValueAtEndOfBlockInternal(BasicBlock *BB);
 
   void operator=(const SSAUpdater&); // DO NOT IMPLEMENT
   SSAUpdater(const SSAUpdater&);     // DO NOT IMPLEMENT
+};
+  
+/// LoadAndStorePromoter - This little helper class provides a convenient way to
+/// promote a collection of loads and stores into SSA Form using the SSAUpdater.
+/// This handles complexities that SSAUpdater doesn't, such as multiple loads
+/// and stores in one block.
+///
+/// Clients of this class are expected to subclass this and implement the
+/// virtual methods.
+///
+class LoadAndStorePromoter {
+protected:
+  SSAUpdater &SSA;
+public:
+  LoadAndStorePromoter(const SmallVectorImpl<Instruction*> &Insts,
+                       SSAUpdater &S, StringRef Name = StringRef());
+  virtual ~LoadAndStorePromoter() {}
+  
+  /// run - This does the promotion.  Insts is a list of loads and stores to
+  /// promote, and Name is the basename for the PHIs to insert.  After this is
+  /// complete, the loads and stores are removed from the code.
+  void run(const SmallVectorImpl<Instruction*> &Insts) const;
+  
+  
+  /// Return true if the specified instruction is in the Inst list (which was
+  /// passed into the run method).  Clients should implement this with a more
+  /// efficient version if possible.
+  virtual bool isInstInList(Instruction *I,
+                            const SmallVectorImpl<Instruction*> &Insts) const;
+  
+  /// doExtraRewritesBeforeFinalDeletion - This hook is invoked after all the
+  /// stores are found and inserted as available values, but 
+  virtual void doExtraRewritesBeforeFinalDeletion() const {
+  }
+  
+  /// replaceLoadWithValue - Clients can choose to implement this to get
+  /// notified right before a load is RAUW'd another value.
+  virtual void replaceLoadWithValue(LoadInst *LI, Value *V) const {
+  }
+
+  /// This is called before each instruction is deleted.
+  virtual void instructionDeleted(Instruction *I) const {
+  }
+
+  /// updateDebugInfo - This is called to update debug info associated with the
+  /// instruction.
+  virtual void updateDebugInfo(Instruction *I) const {
+  }
 };
 
 } // End llvm namespace

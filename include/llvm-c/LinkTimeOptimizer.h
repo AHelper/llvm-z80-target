@@ -8,7 +8,7 @@
 //===----------------------------------------------------------------------===//
 //
 // This header provides a C API to use the LLVM link time optimization
-// library. This is inteded to be used by linkers which are C-only in
+// library. This is intended to be used by linkers which are C-only in
 // their implementation for performing LTO.
 //
 //===----------------------------------------------------------------------===//
@@ -19,6 +19,13 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/**
+ * @defgroup LLVMCLinkTimeOptimizer Link Time Optimization
+ * @ingroup LLVMC
+ *
+ * @{
+ */
 
   /// This provides a dummy type for pointers to the LTO object.
   typedef void* llvm_lto_t;
@@ -50,6 +57,10 @@ extern "C" {
     (llvm_lto_t lto, const char* input_filename);
   extern llvm_lto_status_t llvm_optimize_modules
     (llvm_lto_t lto, const char* output_filename);
+
+/**
+ * @}
+ */
 
 #ifdef __cplusplus
 }

@@ -1,4 +1,4 @@
-//===- MipsRegisterInfo.h - Mips Register Information Impl ------*- C++ -*-===//
+//===-- MipsRegisterInfo.h - Mips Register Information Impl -----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -16,7 +16,9 @@
 
 #include "Mips.h"
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "MipsGenRegisterInfo.h.inc"
+
+#define GET_REGINFO_HEADER
+#include "MipsGenRegisterInfo.inc"
 
 namespace llvm {
 class MipsSubtarget;
@@ -26,7 +28,7 @@ class Type;
 struct MipsRegisterInfo : public MipsGenRegisterInfo {
   const MipsSubtarget &Subtarget;
   const TargetInstrInfo &TII;
-  
+
   MipsRegisterInfo(const MipsSubtarget &Subtarget, const TargetInstrInfo &tii);
 
   /// getRegisterNumbering - Given the enum value for some register, e.g.
@@ -40,35 +42,29 @@ struct MipsRegisterInfo : public MipsGenRegisterInfo {
   void adjustMipsStackFrame(MachineFunction &MF) const;
 
   /// Code Generation virtual methods...
-  const unsigned *getCalleeSavedRegs(const MachineFunction* MF = 0) const;
+  const uint16_t *getCalleeSavedRegs(const MachineFunction* MF = 0) const;
+  const uint32_t *getCallPreservedMask(CallingConv::ID) const;
 
   BitVector getReservedRegs(const MachineFunction &MF) const;
 
-  bool hasFP(const MachineFunction &MF) const;
+  virtual bool requiresRegisterScavenging(const MachineFunction &MF) const;
 
   void eliminateCallFramePseudoInstr(MachineFunction &MF,
                                      MachineBasicBlock &MBB,
                                      MachineBasicBlock::iterator I) const;
 
   /// Stack Frame Processing Methods
-  unsigned eliminateFrameIndex(MachineBasicBlock::iterator II,
-                               int SPAdj, FrameIndexValue *Value = NULL,
-                               RegScavenger *RS = NULL) const;
+  void eliminateFrameIndex(MachineBasicBlock::iterator II,
+                           int SPAdj, RegScavenger *RS = NULL) const;
 
   void processFunctionBeforeFrameFinalized(MachineFunction &MF) const;
 
-  void emitPrologue(MachineFunction &MF) const;
-  void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;
-  
   /// Debug information queries.
-  unsigned getRARegister() const;
   unsigned getFrameRegister(const MachineFunction &MF) const;
 
   /// Exception handling queries.
   unsigned getEHExceptionRegister() const;
   unsigned getEHHandlerRegister() const;
-
-  int getDwarfRegNum(unsigned RegNum, bool isEH) const;
 };
 
 } // end namespace llvm

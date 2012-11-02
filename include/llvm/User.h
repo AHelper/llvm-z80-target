@@ -19,6 +19,7 @@
 #ifndef LLVM_USER_H
 #define LLVM_USER_H
 
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Value.h"
 
 namespace llvm {
@@ -29,25 +30,12 @@ namespace llvm {
 template <class>
 struct OperandTraits;
 
-class User;
-
-/// OperandTraits<User> - specialization to User
-template <>
-struct OperandTraits<User> {
-  static inline Use *op_begin(User*);
-  static inline Use *op_end(User*);
-  static inline unsigned operands(const User*);
-  template <class U>
-  struct Layout {
-    typedef U overlay;
-  };
-};
-
 class User : public Value {
   User(const User &);             // Do not implement
   void *operator new(size_t);     // Do not implement
   template <unsigned>
   friend struct HungoffOperandTraits;
+  virtual void anchor();
 protected:
   /// OperandList - This is a pointer to the array of Uses for this User.
   /// For nodes of fixed arity (e.g. a binary operator) this array will live
@@ -61,31 +49,28 @@ protected:
   unsigned NumOperands;
 
   void *operator new(size_t s, unsigned Us);
-  void *operator new(size_t s, unsigned Us, bool Prefix);
-  User(const Type *ty, unsigned vty, Use *OpList, unsigned NumOps)
+  User(Type *ty, unsigned vty, Use *OpList, unsigned NumOps)
     : Value(ty, vty), OperandList(OpList), NumOperands(NumOps) {}
   Use *allocHungoffUses(unsigned) const;
-  void dropHungoffUses(Use *U) {
-    if (OperandList == U) {
-      OperandList = 0;
-      NumOperands = 0;
-    }
-    Use::zap(U, U->getImpliedUser(), true);
+  void dropHungoffUses() {
+    Use::zap(OperandList, OperandList + NumOperands, true);
+    OperandList = 0;
+    // Reset NumOperands so User::operator delete() does the right thing.
+    NumOperands = 0;
   }
 public:
   ~User() {
-    if ((intptr_t(OperandList) & 1) == 0)
-      Use::zap(OperandList, OperandList + NumOperands);
+    Use::zap(OperandList, OperandList + NumOperands);
   }
   /// operator delete - free memory allocated for User and Use objects
   void operator delete(void *Usr);
   /// placement delete - required by std, but never called.
   void operator delete(void*, unsigned) {
-    assert(0 && "Constructor throws?");
+    llvm_unreachable("Constructor throws?");
   }
   /// placement delete - required by std, but never called.
   void operator delete(void*, unsigned, bool) {
-    assert(0 && "Constructor throws?");
+    llvm_unreachable("Constructor throws?");
   }
 protected:
   template <int Idx, typename U> static Use &OpFrom(const U *that) {
@@ -112,11 +97,11 @@ public:
     OperandList[i] = Val;
   }
   const Use &getOperandUse(unsigned i) const {
-    assert(i < NumOperands && "getOperand() out of range!");
+    assert(i < NumOperands && "getOperandUse() out of range!");
     return OperandList[i];
   }
   Use &getOperandUse(unsigned i) {
-    assert(i < NumOperands && "getOperand() out of range!");
+    assert(i < NumOperands && "getOperandUse() out of range!");
     return OperandList[i];
   }
   
@@ -157,18 +142,6 @@ public:
     return isa<Instruction>(V) || isa<Constant>(V);
   }
 };
-
-inline Use *OperandTraits<User>::op_begin(User *U) {
-  return U->op_begin();
-}
-
-inline Use *OperandTraits<User>::op_end(User *U) {
-  return U->op_end();
-}
-
-inline unsigned OperandTraits<User>::operands(const User *U) {
-  return U->getNumOperands();
-}
 
 template<> struct simplify_type<User::op_iterator> {
   typedef Value* SimpleType;

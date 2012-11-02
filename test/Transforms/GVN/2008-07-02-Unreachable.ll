@@ -1,10 +1,11 @@
-; RUN: opt < %s -gvn -S | grep {ret i8 \[%\]tmp3}
+; RUN: opt < %s -basicaa -gvn -S | grep {ret i8 \[%\]tmp3}
 ; PR2503
 
 @g_3 = external global i8		; <i8*> [#uses=2]
 
 define i8 @func_1() nounwind  {
 entry:
+  %A = alloca i8
 	br i1 false, label %ifelse, label %ifthen
 
 ifthen:		; preds = %entry
@@ -12,6 +13,7 @@ ifthen:		; preds = %entry
 
 ifelse:		; preds = %entry
 	%tmp3 = load i8* @g_3		; <i8> [#uses=0]
+        store i8 %tmp3, i8* %A
 	br label %forcond.thread
 
 forcond.thread:		; preds = %ifelse

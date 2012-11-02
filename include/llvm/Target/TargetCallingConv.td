@@ -42,7 +42,7 @@ class CCIf<string predicate, CCAction A> : CCPredicateAction<A> {
 class CCIfByVal<CCAction A> : CCIf<"ArgFlags.isByVal()", A> {
 }
 
-/// CCIfCC - Match of the current calling convention is 'CC'.
+/// CCIfCC - Match if the current calling convention is 'CC'.
 class CCIfCC<string CC, CCAction A>
   : CCIf<!strconcat("State.getCallingConv() == ", CC), A> {}
 
@@ -89,6 +89,13 @@ class CCAssignToStack<int size, int align> : CCAction {
   int Align = align;
 }
 
+/// CCAssignToStackWithShadow - Same as CCAssignToStack, but with a register
+/// to be shadowed.
+class CCAssignToStackWithShadow<int size, int align, Register reg> :
+        CCAssignToStack<size, align> {
+  Register ShadowReg = reg;
+}
+
 /// CCPassByVal - This action always matches: it assigns the value to a stack
 /// slot to implement ByVal aggregate parameter passing. Size and alignment
 /// specify the minimum size and alignment for the stack slot.
@@ -125,4 +132,15 @@ class CCDelegateTo<CallingConv cc> : CCAction {
 /// that the target supports.
 class CallingConv<list<CCAction> actions> {
   list<CCAction> Actions = actions;
+}
+
+/// CalleeSavedRegs - A list of callee saved registers for a given calling
+/// convention.  The order of registers is used by PrologEpilogInsertion when
+/// allocation stack slots for saved registers.
+///
+/// For each CalleeSavedRegs def, TableGen will emit a FOO_SaveList array for
+/// returning from getCalleeSavedRegs(), and a FOO_RegMask bit mask suitable for
+/// returning from getCallPreservedMask().
+class CalleeSavedRegs<dag saves> {
+  dag SaveList = saves;
 }

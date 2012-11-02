@@ -14,21 +14,17 @@
 #ifndef LLVM_ADT_STRINGEXTRAS_H
 #define LLVM_ADT_STRINGEXTRAS_H
 
-#include "llvm/System/DataTypes.h"
-#include "llvm/ADT/APFloat.h"
+#include "llvm/Support/DataTypes.h"
 #include "llvm/ADT/StringRef.h"
-#include <cctype>
-#include <cstdio>
-#include <string>
-#include <vector>
 
 namespace llvm {
 template<typename T> class SmallVectorImpl;
 
-/// hexdigit - Return the (uppercase) hexadecimal character for the
+/// hexdigit - Return the hexadecimal character for the
 /// given number \arg X (which should be less than 16).
-static inline char hexdigit(unsigned X) {
-  return X < 10 ? '0' + X : 'A' + X - 10;
+static inline char hexdigit(unsigned X, bool LowerCase = false) {
+  const char HexChar = LowerCase ? 'a' : 'A';
+  return X < 10 ? '0' + X : HexChar + X - 10;
 }
 
 /// utohex_buffer - Emit the specified number into the buffer specified by
@@ -100,38 +96,6 @@ static inline std::string itostr(int64_t X) {
     return utostr(static_cast<uint64_t>(X));
 }
 
-static inline std::string ftostr(double V) {
-  char Buffer[200];
-  sprintf(Buffer, "%20.6e", V);
-  char *B = Buffer;
-  while (*B == ' ') ++B;
-  return B;
-}
-
-static inline std::string ftostr(const APFloat& V) {
-  if (&V.getSemantics() == &APFloat::IEEEdouble)
-    return ftostr(V.convertToDouble());
-  else if (&V.getSemantics() == &APFloat::IEEEsingle)
-    return ftostr((double)V.convertToFloat());
-  return "<unknown format in ftostr>"; // error
-}
-
-static inline std::string LowercaseString(const std::string &S) {
-  std::string result(S);
-  for (unsigned i = 0; i < S.length(); ++i)
-    if (isupper(result[i]))
-      result[i] = char(tolower(result[i]));
-  return result;
-}
-
-static inline std::string UppercaseString(const std::string &S) {
-  std::string result(S);
-  for (unsigned i = 0; i < S.length(); ++i)
-    if (islower(result[i]))
-      result[i] = char(toupper(result[i]));
-  return result;
-}
-
 /// StrInStrNoCase - Portable version of strcasestr.  Locates the first
 /// occurrence of string 's1' in string 's2', ignoring case.  Returns
 /// the offset of s2 in s1 or npos if s2 cannot be found.
@@ -152,7 +116,7 @@ void SplitString(StringRef Source,
                  SmallVectorImpl<StringRef> &OutFragments,
                  StringRef Delimiters = " \t\n\v\f\r");
 
-/// HashString - Hash funtion for strings.
+/// HashString - Hash function for strings.
 ///
 /// This is the Bernstein hash function.
 //

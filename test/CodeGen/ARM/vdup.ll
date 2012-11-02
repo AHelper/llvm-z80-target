@@ -162,24 +162,6 @@ define <4 x float> @v_shuffledupQfloat(float %A) nounwind {
 	ret <4 x float> %tmp2
 }
 
-define <2 x float> @v_shuffledupfloat2(float* %A) nounwind {
-;CHECK: v_shuffledupfloat2:
-;CHECK: vdup.32
-	%tmp0 = load float* %A
-        %tmp1 = insertelement <2 x float> undef, float %tmp0, i32 0
-        %tmp2 = shufflevector <2 x float> %tmp1, <2 x float> undef, <2 x i32> zeroinitializer
-        ret <2 x float> %tmp2
-}
-
-define <4 x float> @v_shuffledupQfloat2(float* %A) nounwind {
-;CHECK: v_shuffledupQfloat2:
-;CHECK: vdup.32
-        %tmp0 = load float* %A
-        %tmp1 = insertelement <4 x float> undef, float %tmp0, i32 0
-        %tmp2 = shufflevector <4 x float> %tmp1, <4 x float> undef, <4 x i32> zeroinitializer
-        ret <4 x float> %tmp2
-}
-
 define <8 x i8> @vduplane8(<8 x i8>* %A) nounwind {
 ;CHECK: vduplane8:
 ;CHECK: vdup.8
@@ -266,4 +248,16 @@ define <2 x double> @qux(<2 x double> %arg0_int64x1_t) nounwind readnone {
 entry:
   %0 = shufflevector <2 x double> %arg0_int64x1_t, <2 x double> undef, <2 x i32> <i32 0, i32 0>
   ret <2 x double> %0
+}
+
+; Radar 7373643
+;CHECK: redundantVdup:
+;CHECK: vmov.i8
+;CHECK-NOT: vdup.8
+;CHECK: vstr
+define void @redundantVdup(<8 x i8>* %ptr) nounwind {
+  %1 = insertelement <8 x i8> undef, i8 -128, i32 0
+  %2 = shufflevector <8 x i8> %1, <8 x i8> undef, <8 x i32> zeroinitializer
+  store <8 x i8> %2, <8 x i8>* %ptr, align 8
+  ret void
 }

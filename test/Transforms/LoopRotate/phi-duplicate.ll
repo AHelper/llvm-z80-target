@@ -27,9 +27,14 @@ for.body:                                         ; preds = %for.cond
 for.end:                                          ; preds = %for.cond
   ret void
 }
-; Should only end up with one phi.
-; CHECK: for.body:
-; CHECK-NEXT: %j.02 = phi i64
-; CHECK-NOT: phi
-; CHECK: ret void
 
+; Should only end up with one phi.
+; CHECK:      define void @test
+; CHECK-NEXT: entry:
+; CHECK-NEXT:   br label %for.body
+; CHECK:      for.body:
+; CHECK-NEXT:   %j.01 = phi i64
+; CHECK-NOT:  br
+; CHECK:   br i1 %cmp, label %for.body, label %for.end
+; CHECK:      for.end:
+; CHECK-NEXT:        ret void

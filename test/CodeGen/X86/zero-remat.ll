@@ -1,5 +1,5 @@
 ; RUN: llc < %s -march=x86-64 | FileCheck %s --check-prefix=CHECK-64
-; RUN: llc < %s -march=x86-64 -stats  -info-output-file - | grep asm-printer  | grep 12
+; RUN: llc < %s -march=x86-64 -o /dev/null -stats  -info-output-file - | grep asm-printer  | grep 12
 ; RUN: llc < %s -march=x86 | FileCheck %s --check-prefix=CHECK-32
 
 declare void @bar(double %x)
@@ -16,9 +16,9 @@ define double @foo() nounwind {
 ;CHECK-32: ret
 
 ;CHECK-64: foo:
-;CHECK-64: pxor
+;CHECK-64: xorps
 ;CHECK-64: call
-;CHECK-64: pxor
+;CHECK-64: xorps
 ;CHECK-64: ret
 }
 
@@ -33,8 +33,8 @@ define float @foof() nounwind {
 ;CHECK-32: ret
 
 ;CHECK-64: foof:
-;CHECK-64: pxor
+;CHECK-64: xorps
 ;CHECK-64: call
-;CHECK-64: pxor
+;CHECK-64: xorps
 ;CHECK-64: ret
 }

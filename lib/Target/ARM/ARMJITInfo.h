@@ -1,4 +1,4 @@
-//===- ARMJITInfo.h - ARM implementation of the JIT interface  --*- C++ -*-===//
+//===-- ARMJITInfo.h - ARM implementation of the JIT interface  -*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -105,7 +105,7 @@ namespace llvm {
     /// model is PIC.
     void Initialize(const MachineFunction &MF, bool isPIC) {
       const ARMFunctionInfo *AFI = MF.getInfo<ARMFunctionInfo>();
-      ConstPoolId2AddrMap.resize(AFI->getNumConstPoolEntries());
+      ConstPoolId2AddrMap.resize(AFI->getNumPICLabels());
       JumpTableId2AddrMap.resize(AFI->getNumJumpTables());
       IsPIC = isPIC;
     }

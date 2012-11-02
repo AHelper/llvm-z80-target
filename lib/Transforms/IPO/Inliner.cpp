@@ -29,13 +29,17 @@
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/Statistic.h"
-#include <set>
 using namespace llvm;
 
 STATISTIC(NumInlined, "Number of functions inlined");
 STATISTIC(NumCallsDeleted, "Number of call sites deleted, not inlined");
 STATISTIC(NumDeleted, "Number of functions deleted because all callers found");
 STATISTIC(NumMergedAllocas, "Number of allocas merged together");
+
+// This weirdly named statistic tracks the number of times that, when attemting
+// to inline a function A into B, we analyze the callers of B in order to see
+// if those would be more profitable and blocked inline steps.
+STATISTIC(NumCallerCallersAnalyzed, "Number of caller-callers analyzed");
 
 static cl::opt<int>
 InlineLimit("inline-threshold", cl::Hidden, cl::init(225), cl::ZeroOrMore,
@@ -48,11 +52,13 @@ HintThreshold("inlinehint-threshold", cl::Hidden, cl::init(325),
 // Threshold to use when optsize is specified (and there is no -inline-limit).
 const int OptSizeThreshold = 75;
 
-Inliner::Inliner(void *ID) 
-  : CallGraphSCCPass(ID), InlineThreshold(InlineLimit) {}
+Inliner::Inliner(char &ID) 
+  : CallGraphSCCPass(ID), InlineThreshold(InlineLimit), InsertLifetime(true) {}
 
-Inliner::Inliner(void *ID, int Threshold) 
-  : CallGraphSCCPass(ID), InlineThreshold(Threshold) {}
+Inliner::Inliner(char &ID, int Threshold, bool InsertLifetime)
+  : CallGraphSCCPass(ID), InlineThreshold(InlineLimit.getNumOccurrences() > 0 ?
+                                          InlineLimit : Threshold),
+    InsertLifetime(InsertLifetime) {}
 
 /// getAnalysisUsage - For this class, we declare that we require and preserve
 /// the call graph.  If the derived class implements this method, it should
@@ -62,7 +68,7 @@ void Inliner::getAnalysisUsage(AnalysisUsage &Info) const {
 }
 
 
-typedef DenseMap<const ArrayType*, std::vector<AllocaInst*> >
+typedef DenseMap<ArrayType*, std::vector<AllocaInst*> >
 InlinedArrayAllocasTy;
 
 /// InlineCallIfPossible - If it is possible to inline the specified call site,
@@ -74,13 +80,14 @@ InlinedArrayAllocasTy;
 /// inline this call site we attempt to reuse already available allocas or add
 /// any new allocas to the set if not possible.
 static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
-                                 InlinedArrayAllocasTy &InlinedArrayAllocas) {
+                                 InlinedArrayAllocasTy &InlinedArrayAllocas,
+                                 int InlineHistory, bool InsertLifetime) {
   Function *Callee = CS.getCalledFunction();
   Function *Caller = CS.getCaller();
 
   // Try to inline the function.  Get the list of static allocas that were
   // inlined.
-  if (!InlineFunction(CS, IFI))
+  if (!InlineFunction(CS, IFI, InsertLifetime))
     return false;
 
   // If the inlined function had a higher stack protection level than the
@@ -91,7 +98,6 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
            !Caller->hasFnAttr(Attribute::StackProtectReq))
     Caller->addFnAttr(Attribute::StackProtect);
 
-  
   // Look at all of the allocas that we inlined through this call site.  If we
   // have already inlined other allocas through other calls into this function,
   // then we know that they have disjoint lifetimes and that we can merge them.
@@ -115,6 +121,21 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
   //
   SmallPtrSet<AllocaInst*, 16> UsedAllocas;
   
+  // When processing our SCC, check to see if CS was inlined from some other
+  // call site.  For example, if we're processing "A" in this code:
+  //   A() { B() }
+  //   B() { x = alloca ... C() }
+  //   C() { y = alloca ... }
+  // Assume that C was not inlined into B initially, and so we're processing A
+  // and decide to inline B into A.  Doing this makes an alloca available for
+  // reuse and makes a callsite (C) available for inlining.  When we process
+  // the C call site we don't want to do any alloca merging between X and Y
+  // because their scopes are not disjoint.  We could make this smarter by
+  // keeping track of the inline history for each alloca in the
+  // InlinedArrayAllocas but this isn't likely to be a significant win.
+  if (InlineHistory != -1)  // Only do merging for top-level call sites in SCC.
+    return true;
+  
   // Loop over all the allocas we have so far and see if they can be merged with
   // a previously inlined alloca.  If not, remember that we had it.
   for (unsigned AllocaNo = 0, e = IFI.StaticAllocas.size();
@@ -124,7 +145,7 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
     // Don't bother trying to merge array allocations (they will usually be
     // canonicalized to be an allocation *of* an array), or allocations whose
     // type is not itself an array (because we're afraid of pessimizing SRoA).
-    const ArrayType *ATy = dyn_cast<ArrayType>(AI->getAllocatedType());
+    ArrayType *ATy = dyn_cast<ArrayType>(AI->getAllocatedType());
     if (ATy == 0 || AI->isArrayAllocation())
       continue;
     
@@ -152,19 +173,21 @@ static bool InlineCallIfPossible(CallSite CS, InlineFunctionInfo &IFI,
       
       // Otherwise, we *can* reuse it, RAUW AI into AvailableAlloca and declare
       // success!
-      DEBUG(dbgs() << "    ***MERGED ALLOCA: " << *AI);
+      DEBUG(dbgs() << "    ***MERGED ALLOCA: " << *AI << "\n\t\tINTO: "
+                   << *AvailableAlloca << '\n');
       
       AI->replaceAllUsesWith(AvailableAlloca);
       AI->eraseFromParent();
       MergedAwayAlloca = true;
       ++NumMergedAllocas;
+      IFI.StaticAllocas[AllocaNo] = 0;
       break;
     }
 
     // If we already nuked the alloca, we're done with it.
     if (MergedAwayAlloca)
       continue;
-
+    
     // If we were unable to merge away the alloca either because there are no
     // allocas of the right type available or because we reused them all
     // already, remember that this alloca came from an inlined function and mark
@@ -213,79 +236,85 @@ bool Inliner::shouldInline(CallSite CS) {
     return false;
   }
   
-  int Cost = IC.getValue();
   Function *Caller = CS.getCaller();
-  int CurrentThreshold = getInlineThreshold(CS);
-  float FudgeFactor = getInlineFudgeFactor(CS);
-  int AdjThreshold = (int)(CurrentThreshold * FudgeFactor);
-  if (Cost >= AdjThreshold) {
-    DEBUG(dbgs() << "    NOT Inlining: cost=" << Cost
-          << ", thres=" << AdjThreshold
+  if (!IC) {
+    DEBUG(dbgs() << "    NOT Inlining: cost=" << IC.getCost()
+          << ", thres=" << (IC.getCostDelta() + IC.getCost())
           << ", Call: " << *CS.getInstruction() << "\n");
     return false;
   }
   
-  // Try to detect the case where the current inlining candidate caller
-  // (call it B) is a static function and is an inlining candidate elsewhere,
-  // and the current candidate callee (call it C) is large enough that
-  // inlining it into B would make B too big to inline later.  In these
-  // circumstances it may be best not to inline C into B, but to inline B
-  // into its callers.
-  if (Caller->hasLocalLinkage()) {
+  // Try to detect the case where the current inlining candidate caller (call
+  // it B) is a static or linkonce-ODR function and is an inlining candidate
+  // elsewhere, and the current candidate callee (call it C) is large enough
+  // that inlining it into B would make B too big to inline later. In these
+  // circumstances it may be best not to inline C into B, but to inline B into
+  // its callers.
+  //
+  // This only applies to static and linkonce-ODR functions because those are
+  // expected to be available for inlining in the translation units where they
+  // are used. Thus we will always have the opportunity to make local inlining
+  // decisions. Importantly the linkonce-ODR linkage covers inline functions
+  // and templates in C++.
+  //
+  // FIXME: All of this logic should be sunk into getInlineCost. It relies on
+  // the internal implementation of the inline cost metrics rather than
+  // treating them as truly abstract units etc.
+  if (Caller->hasLocalLinkage() ||
+      Caller->getLinkage() == GlobalValue::LinkOnceODRLinkage) {
     int TotalSecondaryCost = 0;
-    bool outerCallsFound = false;
-    bool allOuterCallsWillBeInlined = true;
-    bool someOuterCallWouldNotBeInlined = false;
+    // The candidate cost to be imposed upon the current function.
+    int CandidateCost = IC.getCost() - (InlineConstants::CallPenalty + 1);
+    // This bool tracks what happens if we do NOT inline C into B.
+    bool callerWillBeRemoved = Caller->hasLocalLinkage();
+    // This bool tracks what happens if we DO inline C into B.
+    bool inliningPreventsSomeOuterInline = false;
     for (Value::use_iterator I = Caller->use_begin(), E =Caller->use_end(); 
          I != E; ++I) {
-      CallSite CS2 = CallSite::get(*I);
+      CallSite CS2(*I);
 
       // If this isn't a call to Caller (it could be some other sort
-      // of reference) skip it.
-      if (CS2.getInstruction() == 0 || CS2.getCalledFunction() != Caller)
+      // of reference) skip it.  Such references will prevent the caller
+      // from being removed.
+      if (!CS2 || CS2.getCalledFunction() != Caller) {
+        callerWillBeRemoved = false;
         continue;
+      }
 
       InlineCost IC2 = getInlineCost(CS2);
-      if (IC2.isNever())
-        allOuterCallsWillBeInlined = false;
-      if (IC2.isAlways() || IC2.isNever())
+      ++NumCallerCallersAnalyzed;
+      if (!IC2) {
+        callerWillBeRemoved = false;
+        continue;
+      }
+      if (IC2.isAlways())
         continue;
 
-      outerCallsFound = true;
-      int Cost2 = IC2.getValue();
-      int CurrentThreshold2 = getInlineThreshold(CS2);
-      float FudgeFactor2 = getInlineFudgeFactor(CS2);
-
-      if (Cost2 >= (int)(CurrentThreshold2 * FudgeFactor2))
-        allOuterCallsWillBeInlined = false;
-
-      // See if we have this case.  We subtract off the penalty
-      // for the call instruction, which we would be deleting.
-      if (Cost2 < (int)(CurrentThreshold2 * FudgeFactor2) &&
-          Cost2 + Cost - (InlineConstants::CallPenalty + 1) >= 
-                (int)(CurrentThreshold2 * FudgeFactor2)) {
-        someOuterCallWouldNotBeInlined = true;
-        TotalSecondaryCost += Cost2;
+      // See if inlining or original callsite would erase the cost delta of
+      // this callsite. We subtract off the penalty for the call instruction,
+      // which we would be deleting.
+      if (IC2.getCostDelta() <= CandidateCost) {
+        inliningPreventsSomeOuterInline = true;
+        TotalSecondaryCost += IC2.getCost();
       }
     }
     // If all outer calls to Caller would get inlined, the cost for the last
     // one is set very low by getInlineCost, in anticipation that Caller will
     // be removed entirely.  We did not account for this above unless there
     // is only one caller of Caller.
-    if (allOuterCallsWillBeInlined && Caller->use_begin() != Caller->use_end())
+    if (callerWillBeRemoved && Caller->use_begin() != Caller->use_end())
       TotalSecondaryCost += InlineConstants::LastCallToStaticBonus;
 
-    if (outerCallsFound && someOuterCallWouldNotBeInlined && 
-        TotalSecondaryCost < Cost) {
-      DEBUG(dbgs() << "    NOT Inlining: " << *CS.getInstruction() << 
-           " Cost = " << Cost << 
+    if (inliningPreventsSomeOuterInline && TotalSecondaryCost < IC.getCost()) {
+      DEBUG(dbgs() << "    NOT Inlining: " << *CS.getInstruction() <<
+           " Cost = " << IC.getCost() <<
            ", outer Cost = " << TotalSecondaryCost << '\n');
       return false;
     }
   }
 
-  DEBUG(dbgs() << "    Inlining: cost=" << Cost
-        << ", thres=" << AdjThreshold
+  DEBUG(dbgs() << "    Inlining: cost=" << IC.getCost()
+        << ", thres=" << (IC.getCostDelta() + IC.getCost())
         << ", Call: " << *CS.getInstruction() << '\n');
   return true;
 }
@@ -303,7 +332,6 @@ static bool InlineHistoryIncludes(Function *F, int InlineHistoryID,
   }
   return false;
 }
-
 
 bool Inliner::runOnSCC(CallGraphSCC &SCC) {
   CallGraph &CG = getAnalysis<CallGraph>();
@@ -334,10 +362,10 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
     
     for (Function::iterator BB = F->begin(), E = F->end(); BB != E; ++BB)
       for (BasicBlock::iterator I = BB->begin(), E = BB->end(); I != E; ++I) {
-        CallSite CS = CallSite::get(I);
+        CallSite CS(cast<Value>(I));
         // If this isn't a call, or it is a call to an intrinsic, it can
         // never be inlined.
-        if (CS.getInstruction() == 0 || isa<IntrinsicInst>(I))
+        if (!CS || isa<IntrinsicInst>(I))
           continue;
         
         // If this is a direct call to an external function, we can never inline
@@ -393,15 +421,13 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
         CG[Caller]->removeCallEdgeFor(CS);
         CS.getInstruction()->eraseFromParent();
         ++NumCallsDeleted;
-        // Update the cached cost info with the missing call
-        growCachedCostInfo(Caller, NULL);
       } else {
         // We can only inline direct calls to non-declarations.
         if (Callee == 0 || Callee->isDeclaration()) continue;
       
-        // If this call sites was obtained by inlining another function, verify
+        // If this call site was obtained by inlining another function, verify
         // that the include path for the function did not include the callee
-        // itself.  If so, we'd be recursively inlinling the same function,
+        // itself.  If so, we'd be recursively inlining the same function,
         // which would provide the same callsites, which would cause us to
         // infinitely inline.
         int InlineHistoryID = CallSites[CSi].second;
@@ -416,7 +442,8 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
           continue;
 
         // Attempt to inline the function.
-        if (!InlineCallIfPossible(CS, InlineInfo, InlinedArrayAllocas))
+        if (!InlineCallIfPossible(CS, InlineInfo, InlinedArrayAllocas,
+                                  InlineHistoryID, InsertLifetime))
           continue;
         ++NumInlined;
         
@@ -434,9 +461,6 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
             CallSites.push_back(std::make_pair(CallSite(Ptr), NewHistoryID));
           }
         }
-        
-        // Update the cached cost info with the inlined call.
-        growCachedCostInfo(Caller, Callee);
       }
       
       // If we inlined or deleted the last possible call site to the function,
@@ -455,8 +479,6 @@ bool Inliner::runOnSCC(CallGraphSCC &SCC) {
         
         // Remove any call graph edges from the callee to its callees.
         CalleeNode->removeAllCalledFunctions();
-        
-        resetCachedCostInfo(Callee);
         
         // Removing the node for callee from the call graph and delete it.
         delete CG.removeFunctionFromModule(CalleeNode);
@@ -491,29 +513,28 @@ bool Inliner::doFinalization(CallGraph &CG) {
 
 /// removeDeadFunctions - Remove dead functions that are not included in
 /// DNR (Do Not Remove) list.
-bool Inliner::removeDeadFunctions(CallGraph &CG, 
-                                  SmallPtrSet<const Function *, 16> *DNR) {
-  SmallPtrSet<CallGraphNode*, 16> FunctionsToRemove;
+bool Inliner::removeDeadFunctions(CallGraph &CG, bool AlwaysInlineOnly) {
+  SmallVector<CallGraphNode*, 16> FunctionsToRemove;
 
   // Scan for all of the functions, looking for ones that should now be removed
   // from the program.  Insert the dead ones in the FunctionsToRemove set.
   for (CallGraph::iterator I = CG.begin(), E = CG.end(); I != E; ++I) {
     CallGraphNode *CGN = I->second;
-    if (CGN->getFunction() == 0)
-      continue;
-    
     Function *F = CGN->getFunction();
-    
+    if (!F || F->isDeclaration())
+      continue;
+
+    // Handle the case when this function is called and we only want to care
+    // about always-inline functions. This is a bit of a hack to share code
+    // between here and the InlineAlways pass.
+    if (AlwaysInlineOnly && !F->hasFnAttr(Attribute::AlwaysInline))
+      continue;
+
     // If the only remaining users of the function are dead constants, remove
     // them.
     F->removeDeadConstantUsers();
 
-    if (DNR && DNR->count(F))
-      continue;
-    if (!F->hasLinkOnceLinkage() && !F->hasLocalLinkage() &&
-        !F->hasAvailableExternallyLinkage())
-      continue;
-    if (!F->use_empty())
+    if (!F->isDefTriviallyDead())
       continue;
     
     // Remove any call graph edges from the function to its callees.
@@ -525,24 +546,27 @@ bool Inliner::removeDeadFunctions(CallGraph &CG,
     CG.getExternalCallingNode()->removeAnyCallEdgeTo(CGN);
 
     // Removing the node for callee from the call graph and delete it.
-    FunctionsToRemove.insert(CGN);
+    FunctionsToRemove.push_back(CGN);
   }
+  if (FunctionsToRemove.empty())
+    return false;
 
   // Now that we know which functions to delete, do so.  We didn't want to do
   // this inline, because that would invalidate our CallGraph::iterator
   // objects. :(
   //
-  // Note that it doesn't matter that we are iterating over a non-stable set
+  // Note that it doesn't matter that we are iterating over a non-stable order
   // here to do this, it doesn't matter which order the functions are deleted
   // in.
-  bool Changed = false;
-  for (SmallPtrSet<CallGraphNode*, 16>::iterator I = FunctionsToRemove.begin(),
-       E = FunctionsToRemove.end(); I != E; ++I) {
-    resetCachedCostInfo((*I)->getFunction());
+  array_pod_sort(FunctionsToRemove.begin(), FunctionsToRemove.end());
+  FunctionsToRemove.erase(std::unique(FunctionsToRemove.begin(),
+                                      FunctionsToRemove.end()),
+                          FunctionsToRemove.end());
+  for (SmallVectorImpl<CallGraphNode *>::iterator I = FunctionsToRemove.begin(),
+                                                  E = FunctionsToRemove.end();
+       I != E; ++I) {
     delete CG.removeFunctionFromModule(*I);
     ++NumDeleted;
-    Changed = true;
   }
-
-  return Changed;
+  return true;
 }

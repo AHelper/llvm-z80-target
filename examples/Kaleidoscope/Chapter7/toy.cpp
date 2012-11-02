@@ -5,10 +5,11 @@
 #include "llvm/Module.h"
 #include "llvm/PassManager.h"
 #include "llvm/Analysis/Verifier.h"
+#include "llvm/Analysis/Passes.h"
 #include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetSelect.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Support/IRBuilder.h"
+#include "llvm/Support/TargetSelect.h"
 #include <cstdio>
 #include <string>
 #include <map>
@@ -684,7 +685,7 @@ Value *BinaryExprAST::Codegen() {
   assert(F && "binary operator not found!");
   
   Value *Ops[] = { L, R };
-  return Builder.CreateCall(F, Ops, Ops+2, "binop");
+  return Builder.CreateCall(F, Ops, "binop");
 }
 
 Value *CallExprAST::Codegen() {
@@ -703,7 +704,7 @@ Value *CallExprAST::Codegen() {
     if (ArgsV.back() == 0) return 0;
   }
   
-  return Builder.CreateCall(CalleeF, ArgsV.begin(), ArgsV.end(), "calltmp");
+  return Builder.CreateCall(CalleeF, ArgsV, "calltmp");
 }
 
 Value *IfExprAST::Codegen() {
@@ -749,7 +750,7 @@ Value *IfExprAST::Codegen() {
   // Emit merge block.
   TheFunction->getBasicBlockList().push_back(MergeBB);
   Builder.SetInsertPoint(MergeBB);
-  PHINode *PN = Builder.CreatePHI(Type::getDoubleTy(getGlobalContext()),
+  PHINode *PN = Builder.CreatePHI(Type::getDoubleTy(getGlobalContext()), 2,
                                   "iftmp");
   
   PN->addIncoming(ThenV, ThenBB);
@@ -904,8 +905,8 @@ Value *VarExprAST::Codegen() {
 
 Function *PrototypeAST::Codegen() {
   // Make the function type:  double(double,double) etc.
-  std::vector<const Type*> Doubles(Args.size(), 
-                                   Type::getDoubleTy(getGlobalContext()));
+  std::vector<Type*> Doubles(Args.size(), 
+                             Type::getDoubleTy(getGlobalContext()));
   FunctionType *FT = FunctionType::get(Type::getDoubleTy(getGlobalContext()),
                                        Doubles, false);
   
@@ -1111,6 +1112,8 @@ int main() {
   // Set up the optimizer pipeline.  Start with registering info about how the
   // target lays out data structures.
   OurFPM.add(new TargetData(*TheExecutionEngine->getTargetData()));
+  // Provide basic AliasAnalysis support for GVN.
+  OurFPM.add(createBasicAliasAnalysisPass());
   // Promote allocas to registers.
   OurFPM.add(createPromoteMemoryToRegisterPass());
   // Do simple "peephole" optimizations and bit-twiddling optzns.

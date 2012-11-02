@@ -15,14 +15,11 @@
 #define LLVM_SUPPORT_MANGLER_H
 
 #include "llvm/ADT/DenseMap.h"
-#include <string>
 
 namespace llvm {
-class StringRef;
 class Twine;
-class Value;
 class GlobalValue;
-template <typename T> class SmallVectorImpl; 
+template <typename T> class SmallVectorImpl;
 class MCContext;
 class MCSymbol;
 class TargetData;
@@ -69,12 +66,6 @@ public:
   /// empty.
   void getNameWithPrefix(SmallVectorImpl<char> &OutName, const Twine &GVName,
                          ManglerPrefixTy PrefixTy = Mangler::Default);
-
-  /// getNameWithPrefix - Return the name of the appropriate prefix
-  /// and the specified global variable's name.  If the global variable doesn't
-  /// have a name, this fills in a unique name for the global.
-  std::string getNameWithPrefix(const GlobalValue *GV,
-                                bool isImplicitlyPrivate = false);
 };
 
 } // End llvm namespace

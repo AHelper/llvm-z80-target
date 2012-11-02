@@ -19,7 +19,7 @@
 #include "llvm/Function.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/System/Valgrind.h"
+#include "llvm/Support/Valgrind.h"
 #include <cstdlib>
 #include <cstring>
 using namespace llvm;
@@ -127,9 +127,17 @@ extern "C" {
     "movaps  %xmm6, 96(%rsp)\n"
     "movaps  %xmm7, 112(%rsp)\n"
     // JIT callee
+#ifdef _WIN64
+    "subq    $32, %rsp\n"
+    "movq    %rbp, %rcx\n"    // Pass prev frame and return address
+    "movq    8(%rbp), %rdx\n"
+    "call    " ASMPREFIX "X86CompilationCallback2\n"
+    "addq    $32, %rsp\n"
+#else
     "movq    %rbp, %rdi\n"    // Pass prev frame and return address
     "movq    8(%rbp), %rsi\n"
     "call    " ASMPREFIX "X86CompilationCallback2\n"
+#endif
     // Restore all XMM arg registers
     "movaps  112(%rsp), %xmm7\n"
     "movaps  96(%rsp), %xmm6\n"
@@ -292,7 +300,10 @@ extern "C" {
     SIZE(X86CompilationCallback_SSE)
   );
 # else
-  void X86CompilationCallback2(intptr_t *StackPtr, intptr_t RetAddr);
+  // the following function is called only from this translation unit,
+  // unless we are under 64bit Windows with MSC, where there is
+  // no support for inline assembly
+  static void X86CompilationCallback2(intptr_t *StackPtr, intptr_t RetAddr);
 
   _declspec(naked) void X86CompilationCallback(void) {
     __asm {
@@ -333,11 +344,11 @@ extern "C" {
 extern "C" {
 #if !(defined (X86_64_JIT) && defined(_MSC_VER))
  // the following function is called only from this translation unit,
- // unless we are under 64bit Windows with MSC, where there is 
+ // unless we are under 64bit Windows with MSC, where there is
  // no support for inline assembly
 static
 #endif
-void ATTRIBUTE_USED
+void LLVM_ATTRIBUTE_USED
 X86CompilationCallback2(intptr_t *StackPtr, intptr_t RetAddr) {
   intptr_t *RetAddrLoc = &StackPtr[1];
   assert(*RetAddrLoc == RetAddr &&
@@ -416,7 +427,9 @@ X86CompilationCallback2(intptr_t *StackPtr, intptr_t RetAddr) {
 
 TargetJITInfo::LazyResolverFn
 X86JITInfo::getLazyResolverFunction(JITCompilerFn F) {
+  TsanIgnoreWritesBegin();
   JITCompilerFunction = F;
+  TsanIgnoreWritesEnd();
 
 #if defined (X86_32_JIT) && !defined (_MSC_VER)
   if (Subtarget->hasSSE1())
@@ -462,7 +475,7 @@ TargetJITInfo::StubLayout X86JITInfo::getStubLayout() {
 
 void *X86JITInfo::emitFunctionStub(const Function* F, void *Target,
                                    JITCodeEmitter &JCE) {
-  // Note, we cast to intptr_t here to silence a -pedantic warning that 
+  // Note, we cast to intptr_t here to silence a -pedantic warning that
   // complains about casting a function pointer to a normal pointer.
 #if defined (X86_32_JIT) && !defined (_MSC_VER)
   bool NotCC = (Target != (void*)(intptr_t)X86CompilationCallback &&
@@ -561,6 +574,5 @@ char* X86JITInfo::allocateThreadLocalMemory(size_t size) {
   return TLSOffset;
 #else
   llvm_unreachable("Cannot allocate thread local storage on this arch!");
-  return 0;
 #endif
 }

@@ -1,5 +1,6 @@
-; RUN: llc < %s -march=arm | FileCheck %s -check-prefix=GENERIC
+; RUN: llc < %s -march=arm -pre-RA-sched=source | FileCheck %s -check-prefix=GENERIC
 ; RUN: llc < %s -mtriple=armv6-apple-darwin | FileCheck %s -check-prefix=DARWIN_V6
+; RUN: llc < %s -mtriple=armv6-apple-darwin -arm-strict-align | FileCheck %s -check-prefix=GENERIC
 ; RUN: llc < %s -mtriple=armv6-linux | FileCheck %s -check-prefix=GENERIC
 
 ; rdar://7113725
@@ -7,14 +8,14 @@
 define void @t(i8* nocapture %a, i8* nocapture %b) nounwind {
 entry:
 ; GENERIC: t:
-; GENERIC: ldrb r2
-; GENERIC: ldrb r3
-; GENERIC: ldrb r12
-; GENERIC: ldrb r1
-; GENERIC: strb r1
-; GENERIC: strb r12
-; GENERIC: strb r3
-; GENERIC: strb r2
+; GENERIC: ldrb [[R2:r[0-9]+]]
+; GENERIC: ldrb [[R3:r[0-9]+]]
+; GENERIC: ldrb [[R12:r[0-9]+]]
+; GENERIC: ldrb [[R1:r[0-9]+]]
+; GENERIC: strb [[R1]]
+; GENERIC: strb [[R12]]
+; GENERIC: strb [[R3]]
+; GENERIC: strb [[R2]]
 
 ; DARWIN_V6: t:
 ; DARWIN_V6: ldr r1

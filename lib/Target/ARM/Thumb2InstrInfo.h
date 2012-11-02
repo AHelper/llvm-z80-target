@@ -1,4 +1,4 @@
-//===- Thumb2InstrInfo.h - Thumb-2 Instruction Information ------*- C++ -*-===//
+//===-- Thumb2InstrInfo.h - Thumb-2 Instruction Information -----*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,9 +14,8 @@
 #ifndef THUMB2INSTRUCTIONINFO_H
 #define THUMB2INSTRUCTIONINFO_H
 
-#include "llvm/Target/TargetInstrInfo.h"
 #include "ARM.h"
-#include "ARMInstrInfo.h"
+#include "ARMBaseInstrInfo.h"
 #include "Thumb2RegisterInfo.h"
 
 namespace llvm {
@@ -28,6 +27,9 @@ class Thumb2InstrInfo : public ARMBaseInstrInfo {
 public:
   explicit Thumb2InstrInfo(const ARMSubtarget &STI);
 
+  /// getNoopForMachoTarget - Return the noop instruction to use for a noop.
+  void getNoopForMachoTarget(MCInst &NopInst) const;
+
   // Return the non-pre/post incrementing version of 'Opc'. Return 0
   // if there is not such an opcode.
   unsigned getUnindexedOpcode(unsigned Opc) const;
@@ -38,17 +40,10 @@ public:
   bool isLegalToSplitMBBAt(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MBBI) const;
 
-  bool isProfitableToIfCvt(MachineBasicBlock &MBB, unsigned NumInstrs) const;
-  
-  bool isProfitableToIfCvt(MachineBasicBlock &TMBB, unsigned NumTInstrs,
-                           MachineBasicBlock &FMBB, unsigned NumFInstrs) const;
-
-  bool copyRegToReg(MachineBasicBlock &MBB,
-                    MachineBasicBlock::iterator I,
-                    unsigned DestReg, unsigned SrcReg,
-                    const TargetRegisterClass *DestRC,
-                    const TargetRegisterClass *SrcRC,
-                    DebugLoc DL) const;
+  void copyPhysReg(MachineBasicBlock &MBB,
+                   MachineBasicBlock::iterator I, DebugLoc DL,
+                   unsigned DestReg, unsigned SrcReg,
+                   bool KillSrc) const;
 
   void storeRegToStackSlot(MachineBasicBlock &MBB,
                            MachineBasicBlock::iterator MBBI,
@@ -72,9 +67,6 @@ public:
   /// always be able to get register info as well (through this method).
   ///
   const Thumb2RegisterInfo &getRegisterInfo() const { return RI; }
-
-  ScheduleHazardRecognizer *
-  CreateTargetPostRAHazardRecognizer(const InstrItineraryData &II) const;
 };
 
 /// getITInstrPredicate - Valid only in Thumb2 mode. This function is identical

@@ -22,6 +22,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(0U, Vec.count());
   EXPECT_EQ(0U, Vec.size());
   EXPECT_FALSE(Vec.any());
+  EXPECT_TRUE(Vec.all());
   EXPECT_TRUE(Vec.none());
   EXPECT_TRUE(Vec.empty());
 
@@ -29,6 +30,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(5U, Vec.count());
   EXPECT_EQ(5U, Vec.size());
   EXPECT_TRUE(Vec.any());
+  EXPECT_TRUE(Vec.all());
   EXPECT_FALSE(Vec.none());
   EXPECT_FALSE(Vec.empty());
 
@@ -36,6 +38,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(5U, Vec.count());
   EXPECT_EQ(11U, Vec.size());
   EXPECT_TRUE(Vec.any());
+  EXPECT_FALSE(Vec.all());
   EXPECT_FALSE(Vec.none());
   EXPECT_FALSE(Vec.empty());
 
@@ -43,6 +46,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(6U, Inv.count());
   EXPECT_EQ(11U, Inv.size());
   EXPECT_TRUE(Inv.any());
+  EXPECT_FALSE(Inv.all());
   EXPECT_FALSE(Inv.none());
   EXPECT_FALSE(Inv.empty());
 
@@ -123,6 +127,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(0U, Vec.count());
   EXPECT_EQ(130U, Vec.size());
   EXPECT_FALSE(Vec.any());
+  EXPECT_FALSE(Vec.all());
   EXPECT_TRUE(Vec.none());
   EXPECT_FALSE(Vec.empty());
 
@@ -130,6 +135,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(0U, Inv.count());
   EXPECT_EQ(0U, Inv.size());
   EXPECT_FALSE(Inv.any());
+  EXPECT_TRUE(Inv.all());
   EXPECT_TRUE(Inv.none());
   EXPECT_TRUE(Inv.empty());
 
@@ -137,6 +143,7 @@ TEST(BitVectorTest, TrivialOperation) {
   EXPECT_EQ(0U, Vec.count());
   EXPECT_EQ(0U, Vec.size());
   EXPECT_FALSE(Vec.any());
+  EXPECT_TRUE(Vec.all());
   EXPECT_TRUE(Vec.none());
   EXPECT_TRUE(Vec.empty());
 }
@@ -189,6 +196,52 @@ TEST(BitVectorTest, ProxyIndex) {
   EXPECT_TRUE(Vec.none());
 }
 
+TEST(BitVectorTest, PortableBitMask) {
+  BitVector A;
+  const uint32_t Mask1[] = { 0x80000000, 6, 5 };
+
+  A.resize(10);
+  A.setBitsInMask(Mask1, 3);
+  EXPECT_EQ(10u, A.size());
+  EXPECT_FALSE(A.test(0));
+
+  A.resize(32);
+  A.setBitsInMask(Mask1, 3);
+  EXPECT_FALSE(A.test(0));
+  EXPECT_TRUE(A.test(31));
+  EXPECT_EQ(1u, A.count());
+
+  A.resize(33);
+  A.setBitsInMask(Mask1, 1);
+  EXPECT_EQ(1u, A.count());
+  A.setBitsInMask(Mask1, 2);
+  EXPECT_EQ(1u, A.count());
+
+  A.resize(34);
+  A.setBitsInMask(Mask1, 2);
+  EXPECT_EQ(2u, A.count());
+
+  A.resize(65);
+  A.setBitsInMask(Mask1, 3);
+  EXPECT_EQ(4u, A.count());
+
+  A.setBitsNotInMask(Mask1, 1);
+  EXPECT_EQ(32u+3u, A.count());
+
+  A.setBitsNotInMask(Mask1, 3);
+  EXPECT_EQ(65u, A.count());
+
+  A.resize(96);
+  EXPECT_EQ(65u, A.count());
+
+  A.clear();
+  A.resize(128);
+  A.setBitsNotInMask(Mask1, 3);
+  EXPECT_EQ(96u-5u, A.count());
+
+  A.clearBitsNotInMask(Mask1, 1);
+  EXPECT_EQ(64-4u, A.count());
+}
 }
 
 #endif

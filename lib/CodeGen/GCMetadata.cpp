@@ -30,8 +30,7 @@ namespace {
     raw_ostream &OS;
     
   public:
-    Printer() : FunctionPass(&ID), OS(errs()) {}
-    explicit Printer(raw_ostream &OS) : FunctionPass(&ID), OS(OS) {}
+    explicit Printer(raw_ostream &OS) : FunctionPass(ID), OS(OS) {}
 
     
     const char *getPassName() const;
@@ -55,8 +54,8 @@ namespace {
   
 }
 
-static RegisterPass<GCModuleInfo>
-X("collector-metadata", "Create Garbage Collector Module Metadata");
+INITIALIZE_PASS(GCModuleInfo, "collector-metadata",
+                "Create Garbage Collector Module Metadata", false, false)
 
 // -----------------------------------------------------------------------------
 
@@ -70,7 +69,9 @@ GCFunctionInfo::~GCFunctionInfo() {}
 char GCModuleInfo::ID = 0;
 
 GCModuleInfo::GCModuleInfo()
-  : ImmutablePass(&ID) {}
+    : ImmutablePass(ID) {
+  initializeGCModuleInfoPass(*PassRegistry::getPassRegistry());
+}
 
 GCModuleInfo::~GCModuleInfo() {
   clear();
@@ -142,12 +143,12 @@ void Printer::getAnalysisUsage(AnalysisUsage &AU) const {
 
 static const char *DescKind(GC::PointKind Kind) {
   switch (Kind) {
-    default: llvm_unreachable("Unknown GC point kind");
     case GC::Loop:     return "loop";
     case GC::Return:   return "return";
     case GC::PreCall:  return "pre-call";
     case GC::PostCall: return "post-call";
   }
+  llvm_unreachable("Invalid point kind");
 }
 
 bool Printer::runOnFunction(Function &F) {
@@ -155,12 +156,12 @@ bool Printer::runOnFunction(Function &F) {
   
   GCFunctionInfo *FD = &getAnalysis<GCModuleInfo>().getFunctionInfo(F);
   
-  OS << "GC roots for " << FD->getFunction().getNameStr() << ":\n";
+  OS << "GC roots for " << FD->getFunction().getName() << ":\n";
   for (GCFunctionInfo::roots_iterator RI = FD->roots_begin(),
                                       RE = FD->roots_end(); RI != RE; ++RI)
     OS << "\t" << RI->Num << "\t" << RI->StackOffset << "[sp]\n";
   
-  OS << "GC safe points for " << FD->getFunction().getNameStr() << ":\n";
+  OS << "GC safe points for " << FD->getFunction().getName() << ":\n";
   for (GCFunctionInfo::iterator PI = FD->begin(),
                                 PE = FD->end(); PI != PE; ++PI) {
     
@@ -189,7 +190,7 @@ FunctionPass *llvm::createGCInfoDeleter() {
   return new Deleter();
 }
 
-Deleter::Deleter() : FunctionPass(&ID) {}
+Deleter::Deleter() : FunctionPass(ID) {}
 
 const char *Deleter::getPassName() const {
   return "Delete Garbage Collector Information";

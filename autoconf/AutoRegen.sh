@@ -31,13 +31,13 @@ want_libtool_version_clean=$(clean $want_libtool_version)
 test -d autoconf && test -f autoconf/$configfile && cd autoconf
 test -f $configfile || die "Can't find 'autoconf' dir; please cd into it first"
 autoconf --version | grep $want_autoconf_version > /dev/null
-#test $? -eq 0 || die "Your autoconf was not detected as being $want_autoconf_version_clean"
+test $? -eq 0 || die "Your autoconf was not detected as being $want_autoconf_version_clean"
 aclocal --version | grep '^aclocal.*'$want_aclocal_version > /dev/null
-#test $? -eq 0 || die "Your aclocal was not detected as being $want_aclocal_version_clean"
+test $? -eq 0 || die "Your aclocal was not detected as being $want_aclocal_version_clean"
 autoheader --version | grep '^autoheader.*'$want_autoheader_version > /dev/null
-#test $? -eq 0 || die "Your autoheader was not detected as being $want_autoheader_version_clean"
+test $? -eq 0 || die "Your autoheader was not detected as being $want_autoheader_version_clean"
 libtool --version | grep $want_libtool_version > /dev/null
-#test $? -eq 0 || die "Your libtool was not detected as being $want_libtool_version_clean"
+test $? -eq 0 || die "Your libtool was not detected as being $want_libtool_version_clean"
 echo ""
 echo "### NOTE: ############################################################"
 echo "### If you get *any* warnings from autoconf below you MUST fix the"

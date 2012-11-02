@@ -29,9 +29,9 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/FileUtilities.h"
-#include "llvm/Support/raw_ostream.h"
-#include "llvm/System/Path.h"
-#include "llvm/System/Signals.h"
+#include "llvm/Support/ToolOutputFile.h"
+#include "llvm/Support/Path.h"
+#include "llvm/Support/Signals.h"
 #include <set>
 using namespace llvm;
 
@@ -47,7 +47,39 @@ namespace {
   cl::opt<bool, true>
   NoSCFG("disable-simplifycfg", cl::location(DisableSimplifyCFG),
          cl::desc("Do not use the -simplifycfg pass to reduce testcases"));
-}
+
+  Function* globalInitUsesExternalBA(GlobalVariable* GV) {
+    if (!GV->hasInitializer())
+      return 0;
+
+    Constant *I = GV->getInitializer();
+
+    // walk the values used by the initializer
+    // (and recurse into things like ConstantExpr)
+    std::vector<Constant*> Todo;
+    std::set<Constant*> Done;
+    Todo.push_back(I);
+
+    while (!Todo.empty()) {
+      Constant* V = Todo.back();
+      Todo.pop_back();
+      Done.insert(V);
+
+      if (BlockAddress *BA = dyn_cast<BlockAddress>(V)) {
+        Function *F = BA->getFunction();
+        if (F->isDeclaration())
+          return F;
+      }
+
+      for (User::op_iterator i = V->op_begin(), e = V->op_end(); i != e; ++i) {
+        Constant *C = dyn_cast<Constant>(*i);
+        if (C && !isa<GlobalValue>(C) && !Done.count(C))
+          Todo.push_back(C);
+      }
+    }
+    return 0;
+  }
+}  // end anonymous namespace
 
 /// deleteInstructionFromProgram - This method clones the current Program and
 /// deletes the specified instruction from the cloned module.  It then runs a
@@ -55,13 +87,14 @@ namespace {
 /// depends on the value.  The modified module is then returned.
 ///
 Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
-                                                unsigned Simplification) const {
-  Module *Result = CloneModule(Program);
+                                                unsigned Simplification) {
+  // FIXME, use vmap?
+  Module *Clone = CloneModule(Program);
 
   const BasicBlock *PBB = I->getParent();
   const Function *PF = PBB->getParent();
 
-  Module::iterator RFI = Result->begin(); // Get iterator to corresponding fn
+  Module::iterator RFI = Clone->begin(); // Get iterator to corresponding fn
   std::advance(RFI, std::distance(PF->getParent()->begin(),
                                   Module::const_iterator(PF)));
 
@@ -79,30 +112,23 @@ Module *BugDriver::deleteInstructionFromProgram(const Instruction *I,
   // Remove the instruction from the program.
   TheInst->getParent()->getInstList().erase(TheInst);
 
-  
-  //writeProgramToFile("current.bc", Result);
-    
   // Spiff up the output a little bit.
-  PassManager Passes;
-  // Make sure that the appropriate target data is always used...
-  Passes.add(new TargetData(Result));
+  std::vector<std::string> Passes;
 
-  /// FIXME: If this used runPasses() like the methods below, we could get rid
-  /// of the -disable-* options!
+  /// Can we get rid of the -disable-* options?
   if (Simplification > 1 && !NoDCE)
-    Passes.add(createDeadCodeEliminationPass());
+    Passes.push_back("dce");
   if (Simplification && !DisableSimplifyCFG)
-    Passes.add(createCFGSimplificationPass());      // Delete dead control flow
+    Passes.push_back("simplifycfg");      // Delete dead control flow
 
-  Passes.add(createVerifierPass());
-  Passes.run(*Result);
-  return Result;
-}
-
-static const PassInfo *getPI(Pass *P) {
-  const PassInfo *PI = P->getPassInfo();
-  delete P;
-  return PI;
+  Passes.push_back("verify");
+  Module *New = runPassesOn(Clone, Passes);
+  delete Clone;
+  if (!New) {
+    errs() << "Instruction removal failed.  Sorry. :(  Please report a bug!\n";
+    exit(1);
+  }
+  return New;
 }
 
 /// performFinalCleanups - This method clones the current Program and performs
@@ -114,15 +140,13 @@ Module *BugDriver::performFinalCleanups(Module *M, bool MayModifySemantics) {
   for (Module::iterator I = M->begin(), E = M->end(); I != E; ++I)
     I->setLinkage(GlobalValue::ExternalLinkage);
 
-  std::vector<const PassInfo*> CleanupPasses;
-  CleanupPasses.push_back(getPI(createGlobalDCEPass()));
+  std::vector<std::string> CleanupPasses;
+  CleanupPasses.push_back("globaldce");
 
   if (MayModifySemantics)
-    CleanupPasses.push_back(getPI(createDeadArgHackingPass()));
+    CleanupPasses.push_back("deadarghaX0r");
   else
-    CleanupPasses.push_back(getPI(createDeadArgEliminationPass()));
-
-  CleanupPasses.push_back(getPI(createDeadTypeEliminationPass()));
+    CleanupPasses.push_back("deadargelim");
 
   Module *New = runPassesOn(M, CleanupPasses);
   if (New == 0) {
@@ -138,16 +162,14 @@ Module *BugDriver::performFinalCleanups(Module *M, bool MayModifySemantics) {
 /// function.  This returns null if there are no extractable loops in the
 /// program or if the loop extractor crashes.
 Module *BugDriver::ExtractLoop(Module *M) {
-  std::vector<const PassInfo*> LoopExtractPasses;
-  LoopExtractPasses.push_back(getPI(createSingleLoopExtractorPass()));
+  std::vector<std::string> LoopExtractPasses;
+  LoopExtractPasses.push_back("loop-extract-single");
 
   Module *NewM = runPassesOn(M, LoopExtractPasses);
   if (NewM == 0) {
-    Module *Old = swapProgramIn(M);
     outs() << "*** Loop extraction failed: ";
-    EmitProgressBitcode("loopextraction", true);
+    EmitProgressBitcode(M, "loopextraction", true);
     outs() << "*** Sorry. :(  Please report a bug!\n";
-    swapProgramIn(Old);
     return 0;
   }
 
@@ -183,13 +205,16 @@ void llvm::DeleteFunctionBody(Function *F) {
 static Constant *GetTorInit(std::vector<std::pair<Function*, int> > &TorList) {
   assert(!TorList.empty() && "Don't create empty tor list!");
   std::vector<Constant*> ArrayElts;
+  Type *Int32Ty = Type::getInt32Ty(TorList[0].first->getContext());
+  
+  StructType *STy =
+    StructType::get(Int32Ty, TorList[0].first->getType(), NULL);
   for (unsigned i = 0, e = TorList.size(); i != e; ++i) {
-    std::vector<Constant*> Elts;
-    Elts.push_back(ConstantInt::get(
-          Type::getInt32Ty(TorList[i].first->getContext()), TorList[i].second));
-    Elts.push_back(TorList[i].first);
-    ArrayElts.push_back(ConstantStruct::get(TorList[i].first->getContext(),
-                                            Elts, false));
+    Constant *Elts[] = {
+      ConstantInt::get(Int32Ty, TorList[i].second),
+      TorList[i].first
+    };
+    ArrayElts.push_back(ConstantStruct::get(STy, Elts));
   }
   return ConstantArray::get(ArrayType::get(ArrayElts[0]->getType(), 
                                            ArrayElts.size()),
@@ -201,7 +226,7 @@ static Constant *GetTorInit(std::vector<std::pair<Function*, int> > &TorList) {
 /// static ctors/dtors, we need to add an llvm.global_[cd]tors global to M2, and
 /// prune appropriate entries out of M1s list.
 static void SplitStaticCtorDtor(const char *GlobalName, Module *M1, Module *M2,
-                                ValueMap<const Value*, Value*> VMap) {
+                                ValueToValueMapTy &VMap) {
   GlobalVariable *GV = M1->getNamedGlobal(GlobalName);
   if (!GV || GV->isDeclaration() || GV->hasLocalLinkage() ||
       !GV->use_empty()) return;
@@ -264,7 +289,7 @@ static void SplitStaticCtorDtor(const char *GlobalName, Module *M1, Module *M2,
 Module *
 llvm::SplitFunctionsOutOfModule(Module *M,
                                 const std::vector<Function*> &F,
-                                ValueMap<const Value*, Value*> &VMap) {
+                                ValueToValueMapTy &VMap) {
   // Make sure functions & globals are all external so that linkage
   // between the two modules will work.
   for (Module::iterator I = M->begin(), E = M->end(); I != E; ++I)
@@ -276,13 +301,8 @@ llvm::SplitFunctionsOutOfModule(Module *M,
     I->setLinkage(GlobalValue::ExternalLinkage);
   }
 
-  ValueMap<const Value*, Value*> NewVMap;
+  ValueToValueMapTy NewVMap;
   Module *New = CloneModule(M, NewVMap);
-
-  // Make sure global initializers exist only in the safe module (CBE->.so)
-  for (Module::global_iterator I = New->global_begin(), E = New->global_end();
-       I != E; ++I)
-    I->setInitializer(0);  // Delete the initializer to make it external
 
   // Remove the Test functions from the Safe module
   std::set<Function *> TestFunctions;
@@ -301,6 +321,27 @@ llvm::SplitFunctionsOutOfModule(Module *M,
     if (!TestFunctions.count(I))
       DeleteFunctionBody(I);
   
+
+  // Try to split the global initializers evenly
+  for (Module::global_iterator I = M->global_begin(), E = M->global_end();
+       I != E; ++I) {
+    GlobalVariable *GV = cast<GlobalVariable>(NewVMap[I]);
+    if (Function *TestFn = globalInitUsesExternalBA(I)) {
+      if (Function *SafeFn = globalInitUsesExternalBA(GV)) {
+        errs() << "*** Error: when reducing functions, encountered "
+                  "the global '";
+        WriteAsOperand(errs(), GV, false);
+        errs() << "' with an initializer that references blockaddresses "
+                  "from safe function '" << SafeFn->getName()
+               << "' and from test function '" << TestFn->getName() << "'.\n";
+        exit(1);
+      }
+      I->setInitializer(0);  // Delete the initializer to make it external
+    } else {
+      // If we keep it in the safe module, then delete it in the test module
+      GV->setInitializer(0);
+    }
+  }
 
   // Make sure that there is a global ctor/dtor array in both halves of the
   // module if they both have static ctor/dtor functions.
@@ -327,22 +368,18 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
   if (uniqueFilename.createTemporaryFileOnDisk(true, &ErrMsg)) {
     outs() << "*** Basic Block extraction failed!\n";
     errs() << "Error creating temporary file: " << ErrMsg << "\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
     return 0;
   }
   sys::RemoveFileOnSignal(uniqueFilename);
 
   std::string ErrorInfo;
-  raw_fd_ostream BlocksToNotExtractFile(uniqueFilename.c_str(), ErrorInfo);
+  tool_output_file BlocksToNotExtractFile(uniqueFilename.c_str(), ErrorInfo);
   if (!ErrorInfo.empty()) {
     outs() << "*** Basic Block extraction failed!\n";
     errs() << "Error writing list of blocks to not extract: " << ErrorInfo
            << "\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
     return 0;
   }
   for (std::vector<BasicBlock*>::const_iterator I = BBs.begin(), E = BBs.end();
@@ -351,26 +388,31 @@ Module *BugDriver::ExtractMappedBlocksFromModule(const
     // If the BB doesn't have a name, give it one so we have something to key
     // off of.
     if (!BB->hasName()) BB->setName("tmpbb");
-    BlocksToNotExtractFile << BB->getParent()->getNameStr() << " "
-                           << BB->getName() << "\n";
+    BlocksToNotExtractFile.os() << BB->getParent()->getName() << " "
+                                << BB->getName() << "\n";
   }
-  BlocksToNotExtractFile.close();
+  BlocksToNotExtractFile.os().close();
+  if (BlocksToNotExtractFile.os().has_error()) {
+    errs() << "Error writing list of blocks to not extract: " << ErrorInfo
+           << "\n";
+    EmitProgressBitcode(M, "basicblockextractfail", true);
+    BlocksToNotExtractFile.os().clear_error();
+    return 0;
+  }
+  BlocksToNotExtractFile.keep();
 
   std::string uniqueFN = "--extract-blocks-file=" + uniqueFilename.str();
   const char *ExtraArg = uniqueFN.c_str();
 
-  std::vector<const PassInfo*> PI;
-  std::vector<BasicBlock *> EmptyBBs; // This parameter is ignored.
-  PI.push_back(getPI(createBlockExtractorPass(EmptyBBs)));
+  std::vector<std::string> PI;
+  PI.push_back("extract-blocks");
   Module *Ret = runPassesOn(M, PI, false, 1, &ExtraArg);
 
   uniqueFilename.eraseFromDisk(); // Free disk space
 
   if (Ret == 0) {
     outs() << "*** Basic Block extraction failed, please report a bug!\n";
-    M = swapProgramIn(M);
-    EmitProgressBitcode("basicblockextractfail", true);
-    swapProgramIn(M);
+    EmitProgressBitcode(M, "basicblockextractfail", true);
   }
   return Ret;
 }

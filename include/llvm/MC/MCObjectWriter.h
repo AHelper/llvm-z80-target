@@ -11,7 +11,7 @@
 #define LLVM_MC_MCOBJECTWRITER_H
 
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/System/DataTypes.h"
+#include "llvm/Support/DataTypes.h"
 #include <cassert>
 
 namespace llvm {
@@ -19,8 +19,9 @@ class MCAsmLayout;
 class MCAssembler;
 class MCFixup;
 class MCFragment;
+class MCSymbolData;
+class MCSymbolRefExpr;
 class MCValue;
-class raw_ostream;
 
 /// MCObjectWriter - Defines the object file and target independent interfaces
 /// used by the assembler backend to write native file format object files.
@@ -61,7 +62,8 @@ public:
   ///
   /// This routine is called by the assembler after layout and relaxation is
   /// complete.
-  virtual void ExecutePostLayoutBinding(MCAssembler &Asm) = 0;
+  virtual void ExecutePostLayoutBinding(MCAssembler &Asm,
+                                        const MCAsmLayout &Layout) = 0;
 
   /// Record a relocation entry.
   ///
@@ -75,12 +77,31 @@ public:
                                 const MCFixup &Fixup, MCValue Target,
                                 uint64_t &FixedValue) = 0;
 
+  /// \brief Check whether the difference (A - B) between two symbol
+  /// references is fully resolved.
+  ///
+  /// Clients are not required to answer precisely and may conservatively return
+  /// false, even when a difference is fully resolved.
+  bool
+  IsSymbolRefDifferenceFullyResolved(const MCAssembler &Asm,
+                                     const MCSymbolRefExpr *A,
+                                     const MCSymbolRefExpr *B,
+                                     bool InSet) const;
+
+  virtual bool
+  IsSymbolRefDifferenceFullyResolvedImpl(const MCAssembler &Asm,
+                                         const MCSymbolData &DataA,
+                                         const MCFragment &FB,
+                                         bool InSet,
+                                         bool IsPCRel) const;
+
+
   /// Write the object file.
   ///
   /// This routine is called by the assembler after layout and relaxation is
   /// complete, fixups have been evaluated and applied, and relocations
   /// generated.
-  virtual void WriteObject(const MCAssembler &Asm,
+  virtual void WriteObject(MCAssembler &Asm,
                            const MCAsmLayout &Layout) = 0;
 
   /// @}
@@ -160,6 +181,12 @@ public:
   }
 
   /// @}
+
+  /// Utility function to encode a SLEB128 value.
+  static void EncodeSLEB128(int64_t Value, raw_ostream &OS);
+  /// Utility function to encode a ULEB128 value.
+  static void EncodeULEB128(uint64_t Value, raw_ostream &OS,
+                            unsigned Padding = 0);
 };
 
 } // End llvm namespace

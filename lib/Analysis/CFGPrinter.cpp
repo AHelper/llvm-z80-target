@@ -25,7 +25,9 @@ using namespace llvm;
 namespace {
   struct CFGViewer : public FunctionPass {
     static char ID; // Pass identifcation, replacement for typeid
-    CFGViewer() : FunctionPass(&ID) {}
+    CFGViewer() : FunctionPass(ID) {
+      initializeCFGOnlyViewerPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual bool runOnFunction(Function &F) {
       F.viewCFG();
@@ -41,13 +43,14 @@ namespace {
 }
 
 char CFGViewer::ID = 0;
-static RegisterPass<CFGViewer>
-V0("view-cfg", "View CFG of function", false, true);
+INITIALIZE_PASS(CFGViewer, "view-cfg", "View CFG of function", false, true)
 
 namespace {
   struct CFGOnlyViewer : public FunctionPass {
     static char ID; // Pass identifcation, replacement for typeid
-    CFGOnlyViewer() : FunctionPass(&ID) {}
+    CFGOnlyViewer() : FunctionPass(ID) {
+      initializeCFGOnlyViewerPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual bool runOnFunction(Function &F) {
       F.viewCFGOnly();
@@ -63,18 +66,18 @@ namespace {
 }
 
 char CFGOnlyViewer::ID = 0;
-static RegisterPass<CFGOnlyViewer>
-V1("view-cfg-only",
-   "View CFG of function (with no function bodies)", false, true);
+INITIALIZE_PASS(CFGOnlyViewer, "view-cfg-only",
+                "View CFG of function (with no function bodies)", false, true)
 
 namespace {
   struct CFGPrinter : public FunctionPass {
     static char ID; // Pass identification, replacement for typeid
-    CFGPrinter() : FunctionPass(&ID) {}
-    explicit CFGPrinter(void *pid) : FunctionPass(pid) {}
+    CFGPrinter() : FunctionPass(ID) {
+      initializeCFGPrinterPass(*PassRegistry::getPassRegistry());
+    }
 
     virtual bool runOnFunction(Function &F) {
-      std::string Filename = "cfg." + F.getNameStr() + ".dot";
+      std::string Filename = "cfg." + F.getName().str() + ".dot";
       errs() << "Writing '" << Filename << "'...";
       
       std::string ErrorInfo;
@@ -97,16 +100,18 @@ namespace {
 }
 
 char CFGPrinter::ID = 0;
-static RegisterPass<CFGPrinter>
-P1("dot-cfg", "Print CFG of function to 'dot' file", false, true);
+INITIALIZE_PASS(CFGPrinter, "dot-cfg", "Print CFG of function to 'dot' file", 
+                false, true)
 
 namespace {
   struct CFGOnlyPrinter : public FunctionPass {
     static char ID; // Pass identification, replacement for typeid
-    CFGOnlyPrinter() : FunctionPass(&ID) {}
-    explicit CFGOnlyPrinter(void *pid) : FunctionPass(pid) {}
+    CFGOnlyPrinter() : FunctionPass(ID) {
+      initializeCFGOnlyPrinterPass(*PassRegistry::getPassRegistry());
+    }
+    
     virtual bool runOnFunction(Function &F) {
-      std::string Filename = "cfg." + F.getNameStr() + ".dot";
+      std::string Filename = "cfg." + F.getName().str() + ".dot";
       errs() << "Writing '" << Filename << "'...";
 
       std::string ErrorInfo;
@@ -128,9 +133,9 @@ namespace {
 }
 
 char CFGOnlyPrinter::ID = 0;
-static RegisterPass<CFGOnlyPrinter>
-P2("dot-cfg-only",
-   "Print CFG of function to 'dot' file (with no function bodies)", false, true);
+INITIALIZE_PASS(CFGOnlyPrinter, "dot-cfg-only",
+   "Print CFG of function to 'dot' file (with no function bodies)",
+   false, true)
 
 /// viewCFG - This function is meant for use from the debugger.  You can just
 /// say 'call F->viewCFG()' and a ghostview window should pop up from the
@@ -138,7 +143,7 @@ P2("dot-cfg-only",
 /// being a 'dot' and 'gv' program in your path.
 ///
 void Function::viewCFG() const {
-  ViewGraph(this, "cfg" + getNameStr());
+  ViewGraph(this, "cfg" + getName());
 }
 
 /// viewCFGOnly - This function is meant for use from the debugger.  It works
@@ -147,7 +152,7 @@ void Function::viewCFG() const {
 /// his can make the graph smaller.
 ///
 void Function::viewCFGOnly() const {
-  ViewGraph(this, "cfg" + getNameStr(), true);
+  ViewGraph(this, "cfg" + getName(), true);
 }
 
 FunctionPass *llvm::createCFGPrinterPass () {

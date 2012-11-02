@@ -6,7 +6,7 @@ define i32 @test1(i32 %x) {
 ; ARMv7A: uxtb16 r0, r0
 
 ; ARMv7M: test1
-; ARMv7M: and r0, r0, #16711935
+; ARMv7M: bic r0, r0, #-16711936
 	%tmp1 = and i32 %x, 16711935		; <i32> [#uses=1]
 	ret i32 %tmp1
 }
@@ -128,9 +128,9 @@ define i32 @test10(i32 %p0) {
 
 ; ARMv7M: test10
 ; ARMv7M: mov.w r1, #16253176
+; ARMv7M: mov.w r2, #458759
 ; ARMv7M: and.w r0, r1, r0, lsr #7
-; ARMv7M: mov.w r1, #458759
-; ARMv7M: and.w r1, r1, r0, lsr #5
+; ARMv7M: and.w r1, r2, r0, lsr #5
 ; ARMv7M: orrs r0, r1
 	%tmp1 = lshr i32 %p0, 7		; <i32> [#uses=1]
 	%tmp2 = and i32 %tmp1, 16253176		; <i32> [#uses=2]

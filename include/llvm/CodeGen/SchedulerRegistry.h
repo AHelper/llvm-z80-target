@@ -42,7 +42,7 @@ public:
   : MachinePassRegistryNode(N, D, (MachinePassCtor)C)
   { Registry.Add(this); }
   ~RegisterScheduler() { Registry.Remove(this); }
-  
+
 
   // Accessors.
   //
@@ -68,32 +68,35 @@ public:
 ScheduleDAGSDNodes *createBURRListDAGScheduler(SelectionDAGISel *IS,
                                                CodeGenOpt::Level OptLevel);
 
-/// createTDRRListDAGScheduler - This creates a top down register usage
-/// reduction list scheduler.
-ScheduleDAGSDNodes *createTDRRListDAGScheduler(SelectionDAGISel *IS,
-                                               CodeGenOpt::Level OptLevel);
-
 /// createBURRListDAGScheduler - This creates a bottom up list scheduler that
 /// schedules nodes in source code order when possible.
 ScheduleDAGSDNodes *createSourceListDAGScheduler(SelectionDAGISel *IS,
                                                  CodeGenOpt::Level OptLevel);
 
-/// createHybridListDAGScheduler - This creates a bottom up hybrid register
-/// usage reduction list scheduler that make use of latency information to
-/// avoid stalls for long latency instructions.
+/// createHybridListDAGScheduler - This creates a bottom up register pressure
+/// aware list scheduler that make use of latency information to avoid stalls
+/// for long latency instructions in low register pressure mode. In high
+/// register pressure mode it schedules to reduce register pressure.
 ScheduleDAGSDNodes *createHybridListDAGScheduler(SelectionDAGISel *IS,
                                                  CodeGenOpt::Level);
 
-/// createTDListDAGScheduler - This creates a top-down list scheduler with
-/// a hazard recognizer.
-ScheduleDAGSDNodes *createTDListDAGScheduler(SelectionDAGISel *IS,
-                                             CodeGenOpt::Level OptLevel);
+/// createILPListDAGScheduler - This creates a bottom up register pressure
+/// aware list scheduler that tries to increase instruction level parallelism
+/// in low register pressure mode. In high register pressure mode it schedules
+/// to reduce register pressure.
+ScheduleDAGSDNodes *createILPListDAGScheduler(SelectionDAGISel *IS,
+                                              CodeGenOpt::Level);
 
 /// createFastDAGScheduler - This creates a "fast" scheduler.
 ///
 ScheduleDAGSDNodes *createFastDAGScheduler(SelectionDAGISel *IS,
                                            CodeGenOpt::Level OptLevel);
 
+/// createVLIWDAGScheduler - Scheduler for VLIW targets. This creates top down
+/// DFA driven list scheduler with clustering heuristic to control
+/// register pressure.
+ScheduleDAGSDNodes *createVLIWDAGScheduler(SelectionDAGISel *IS,
+                                           CodeGenOpt::Level OptLevel);
 /// createDefaultScheduler - This creates an instruction scheduler appropriate
 /// for the target.
 ScheduleDAGSDNodes *createDefaultScheduler(SelectionDAGISel *IS,

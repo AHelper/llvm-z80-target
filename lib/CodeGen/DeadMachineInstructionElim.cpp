@@ -28,31 +28,36 @@ STATISTIC(NumDeletes,          "Number of dead instructions deleted");
 namespace {
   class DeadMachineInstructionElim : public MachineFunctionPass {
     virtual bool runOnMachineFunction(MachineFunction &MF);
-    
+
     const TargetRegisterInfo *TRI;
     const MachineRegisterInfo *MRI;
     const TargetInstrInfo *TII;
     BitVector LivePhysRegs;
+    BitVector ReservedRegs;
 
   public:
     static char ID; // Pass identification, replacement for typeid
-    DeadMachineInstructionElim() : MachineFunctionPass(&ID) {}
+    DeadMachineInstructionElim() : MachineFunctionPass(ID) {
+     initializeDeadMachineInstructionElimPass(*PassRegistry::getPassRegistry());
+    }
 
   private:
     bool isDead(const MachineInstr *MI) const;
   };
 }
 char DeadMachineInstructionElim::ID = 0;
+char &llvm::DeadMachineInstructionElimID = DeadMachineInstructionElim::ID;
 
-static RegisterPass<DeadMachineInstructionElim>
-Y("dead-mi-elimination",
-  "Remove dead machine instructions");
-
-FunctionPass *llvm::createDeadMachineInstructionElimPass() {
-  return new DeadMachineInstructionElim();
-}
+INITIALIZE_PASS(DeadMachineInstructionElim, "dead-mi-elimination",
+                "Remove dead machine instructions", false, false)
 
 bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
+  // Technically speaking inline asm without side effects and no defs can still
+  // be deleted. But there is so much bad inline asm code out there, we should
+  // let them be.
+  if (MI->isInlineAsm())
+    return false;
+
   // Don't delete instructions with side effects.
   bool SawStore = false;
   if (!MI->isSafeToMove(TII, 0, SawStore) && !MI->isPHI())
@@ -63,10 +68,14 @@ bool DeadMachineInstructionElim::isDead(const MachineInstr *MI) const {
     const MachineOperand &MO = MI->getOperand(i);
     if (MO.isReg() && MO.isDef()) {
       unsigned Reg = MO.getReg();
-      if (TargetRegisterInfo::isPhysicalRegister(Reg) ?
-          LivePhysRegs[Reg] : !MRI->use_nodbg_empty(Reg)) {
-        // This def has a non-debug use. Don't delete the instruction!
-        return false;
+      if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
+        // Don't delete live physreg defs, or any reserved register defs.
+        if (LivePhysRegs.test(Reg) || ReservedRegs.test(Reg))
+          return false;
+      } else {
+        if (!MRI->use_nodbg_empty(Reg))
+          // This def has a non-debug use. Don't delete the instruction!
+          return false;
       }
     }
   }
@@ -81,9 +90,8 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
   TRI = MF.getTarget().getRegisterInfo();
   TII = MF.getTarget().getInstrInfo();
 
-  // Compute a bitvector to represent all non-allocatable physregs.
-  BitVector NonAllocatableRegs = TRI->getAllocatableSet(MF);
-  NonAllocatableRegs.flip();
+  // Treat reserved registers as always live.
+  ReservedRegs = TRI->getReservedRegs(MF);
 
   // Loop over all instructions in all blocks, from bottom to top, so that it's
   // more likely that chains of dependent but ultimately dead instructions will
@@ -92,18 +100,26 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
        I != E; ++I) {
     MachineBasicBlock *MBB = &*I;
 
-    // Start out assuming that all non-allocatable registers are live
-    // out of this block.
-    LivePhysRegs = NonAllocatableRegs;
+    // Start out assuming that reserved registers are live out of this block.
+    LivePhysRegs = ReservedRegs;
 
     // Also add any explicit live-out physregs for this block.
-    if (!MBB->empty() && MBB->back().getDesc().isReturn())
+    if (!MBB->empty() && MBB->back().isReturn())
       for (MachineRegisterInfo::liveout_iterator LOI = MRI->liveout_begin(),
            LOE = MRI->liveout_end(); LOI != LOE; ++LOI) {
         unsigned Reg = *LOI;
         if (TargetRegisterInfo::isPhysicalRegister(Reg))
           LivePhysRegs.set(Reg);
       }
+
+    // Add live-ins from sucessors to LivePhysRegs. Normally, physregs are not
+    // live across blocks, but some targets (x86) can have flags live out of a
+    // block.
+    for (MachineBasicBlock::succ_iterator S = MBB->succ_begin(),
+           E = MBB->succ_end(); S != E; S++)
+      for (MachineBasicBlock::livein_iterator LI = (*S)->livein_begin();
+           LI != (*S)->livein_end(); LI++)
+        LivePhysRegs.set(*LI);
 
     // Now scan the instructions and delete dead ones, tracking physreg
     // liveness as we go.
@@ -150,15 +166,18 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isDef()) {
           unsigned Reg = MO.getReg();
-          if (Reg != 0 && TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
             LivePhysRegs.reset(Reg);
             // Check the subreg set, not the alias set, because a def
             // of a super-register may still be partially live after
             // this def.
-            for (const unsigned *SubRegs = TRI->getSubRegisters(Reg);
+            for (const uint16_t *SubRegs = TRI->getSubRegisters(Reg);
                  *SubRegs; ++SubRegs)
               LivePhysRegs.reset(*SubRegs);
           }
+        } else if (MO.isRegMask()) {
+          // Register mask of preserved registers. All clobbers are dead.
+          LivePhysRegs.clearBitsNotInMask(MO.getRegMask());
         }
       }
       // Record the physreg uses, after the defs, in case a physreg is
@@ -167,9 +186,9 @@ bool DeadMachineInstructionElim::runOnMachineFunction(MachineFunction &MF) {
         const MachineOperand &MO = MI->getOperand(i);
         if (MO.isReg() && MO.isUse()) {
           unsigned Reg = MO.getReg();
-          if (Reg != 0 && TargetRegisterInfo::isPhysicalRegister(Reg)) {
+          if (TargetRegisterInfo::isPhysicalRegister(Reg)) {
             LivePhysRegs.set(Reg);
-            for (const unsigned *AliasSet = TRI->getAliasSet(Reg);
+            for (const uint16_t *AliasSet = TRI->getAliasSet(Reg);
                  *AliasSet; ++AliasSet)
               LivePhysRegs.set(*AliasSet);
           }

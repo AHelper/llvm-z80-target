@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=x86 -asm-verbose | FileCheck %s
+; RUN: llc < %s -mtriple=i686-linux -asm-verbose | FileCheck %s
 ; Check that register copies in the landing pad come after the EH_LABEL
 
 declare i32 @f()
@@ -17,8 +17,12 @@ cont2:		; preds = %cont
 
 lpad:		; preds = %cont, %entry
 	%v = phi i32 [ %x, %entry ], [ %a, %cont ]		; <i32> [#uses=1]
+        %exn = landingpad {i8*, i32} personality i32 (...)* @__gxx_personality_v0
+                 cleanup
 	ret i32 %v
 }
 
 ; CHECK: lpad
 ; CHECK-NEXT: Ltmp
+
+declare i32 @__gxx_personality_v0(...)

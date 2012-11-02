@@ -13,8 +13,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "CallingConvEmitter.h"
-#include "Record.h"
 #include "CodeGenTarget.h"
+#include "llvm/TableGen/Record.h"
 using namespace llvm;
 
 void CallingConvEmitter::run(raw_ostream &O) {
@@ -26,9 +26,9 @@ void CallingConvEmitter::run(raw_ostream &O) {
   // other.
   for (unsigned i = 0, e = CCs.size(); i != e; ++i) {
     O << "static bool " << CCs[i]->getName()
-      << "(unsigned ValNo, EVT ValVT,\n"
+      << "(unsigned ValNo, MVT ValVT,\n"
       << std::string(CCs[i]->getName().size()+13, ' ')
-      << "EVT LocVT, CCValAssign::LocInfo LocInfo,\n"
+      << "MVT LocVT, CCValAssign::LocInfo LocInfo,\n"
       << std::string(CCs[i]->getName().size()+13, ' ')
       << "ISD::ArgFlagsTy ArgFlags, CCState &State);\n";
   }
@@ -44,9 +44,9 @@ void CallingConvEmitter::EmitCallingConv(Record *CC, raw_ostream &O) {
   Counter = 0;
 
   O << "\n\nstatic bool " << CC->getName()
-    << "(unsigned ValNo, EVT ValVT,\n"
+    << "(unsigned ValNo, MVT ValVT,\n"
     << std::string(CC->getName().size()+13, ' ')
-    << "EVT LocVT, CCValAssign::LocInfo LocInfo,\n"
+    << "MVT LocVT, CCValAssign::LocInfo LocInfo,\n"
     << std::string(CC->getName().size()+13, ' ')
     << "ISD::ArgFlagsTy ArgFlags, CCState &State) {\n";
   // Emit all of the actions, in order.
@@ -96,7 +96,7 @@ void CallingConvEmitter::EmitAction(Record *Action,
         O << IndentStr << "if (unsigned Reg = State.AllocateReg(";
         O << getQualifiedName(RegList->getElementAsRecord(0)) << ")) {\n";
       } else {
-        O << IndentStr << "static const unsigned RegList" << ++Counter
+        O << IndentStr << "static const uint16_t RegList" << ++Counter
           << "[] = {\n";
         O << IndentStr << "  ";
         for (unsigned i = 0, e = RegList->getSize(); i != e; ++i) {
@@ -127,7 +127,7 @@ void CallingConvEmitter::EmitAction(Record *Action,
         unsigned RegListNumber = ++Counter;
         unsigned ShadowRegListNumber = ++Counter;
 
-        O << IndentStr << "static const unsigned RegList" << RegListNumber
+        O << IndentStr << "static const uint16_t RegList" << RegListNumber
           << "[] = {\n";
         O << IndentStr << "  ";
         for (unsigned i = 0, e = RegList->getSize(); i != e; ++i) {
@@ -136,7 +136,7 @@ void CallingConvEmitter::EmitAction(Record *Action,
         }
         O << "\n" << IndentStr << "};\n";
 
-        O << IndentStr << "static const unsigned RegList"
+        O << IndentStr << "static const uint16_t RegList"
           << ShadowRegListNumber << "[] = {\n";
         O << IndentStr << "  ";
         for (unsigned i = 0, e = ShadowRegList->getSize(); i != e; ++i) {
@@ -163,12 +163,14 @@ void CallingConvEmitter::EmitAction(Record *Action,
         O << Size << ", ";
       else
         O << "\n" << IndentStr << "  State.getTarget().getTargetData()"
-          "->getTypeAllocSize(LocVT.getTypeForEVT(State.getContext())), ";
+          "->getTypeAllocSize(EVT(LocVT).getTypeForEVT(State.getContext())), ";
       if (Align)
         O << Align;
       else
         O << "\n" << IndentStr << "  State.getTarget().getTargetData()"
-          "->getABITypeAlignment(LocVT.getTypeForEVT(State.getContext()))";
+          "->getABITypeAlignment(EVT(LocVT).getTypeForEVT(State.getContext()))";
+      if (Action->isSubClassOf("CCAssignToStackWithShadow"))
+        O << ", " << getQualifiedName(Action->getValueAsDef("ShadowReg"));
       O << ");\n" << IndentStr
         << "State.addLoc(CCValAssign::getMem(ValNo, ValVT, Offset"
         << Counter << ", LocVT, LocInfo));\n";

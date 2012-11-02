@@ -222,40 +222,38 @@ bool DAGTypeLegalizer::run() {
     for (unsigned i = 0, NumResults = N->getNumValues(); i < NumResults; ++i) {
       EVT ResultVT = N->getValueType(i);
       switch (getTypeAction(ResultVT)) {
-      default:
-        assert(false && "Unknown action!");
-      case Legal:
+      case TargetLowering::TypeLegal:
         break;
       // The following calls must take care of *all* of the node's results,
       // not just the illegal result they were passed (this includes results
       // with a legal type).  Results can be remapped using ReplaceValueWith,
       // or their promoted/expanded/etc values registered in PromotedIntegers,
       // ExpandedIntegers etc.
-      case PromoteInteger:
+      case TargetLowering::TypePromoteInteger:
         PromoteIntegerResult(N, i);
         Changed = true;
         goto NodeDone;
-      case ExpandInteger:
+      case TargetLowering::TypeExpandInteger:
         ExpandIntegerResult(N, i);
         Changed = true;
         goto NodeDone;
-      case SoftenFloat:
+      case TargetLowering::TypeSoftenFloat:
         SoftenFloatResult(N, i);
         Changed = true;
         goto NodeDone;
-      case ExpandFloat:
+      case TargetLowering::TypeExpandFloat:
         ExpandFloatResult(N, i);
         Changed = true;
         goto NodeDone;
-      case ScalarizeVector:
+      case TargetLowering::TypeScalarizeVector:
         ScalarizeVectorResult(N, i);
         Changed = true;
         goto NodeDone;
-      case SplitVector:
+      case TargetLowering::TypeSplitVector:
         SplitVectorResult(N, i);
         Changed = true;
         goto NodeDone;
-      case WidenVector:
+      case TargetLowering::TypeWidenVector:
         WidenVectorResult(N, i);
         Changed = true;
         goto NodeDone;
@@ -275,38 +273,36 @@ ScanOperands:
 
       EVT OpVT = N->getOperand(i).getValueType();
       switch (getTypeAction(OpVT)) {
-      default:
-        assert(false && "Unknown action!");
-      case Legal:
+      case TargetLowering::TypeLegal:
         continue;
       // The following calls must either replace all of the node's results
       // using ReplaceValueWith, and return "false"; or update the node's
       // operands in place, and return "true".
-      case PromoteInteger:
+      case TargetLowering::TypePromoteInteger:
         NeedsReanalyzing = PromoteIntegerOperand(N, i);
         Changed = true;
         break;
-      case ExpandInteger:
+      case TargetLowering::TypeExpandInteger:
         NeedsReanalyzing = ExpandIntegerOperand(N, i);
         Changed = true;
         break;
-      case SoftenFloat:
+      case TargetLowering::TypeSoftenFloat:
         NeedsReanalyzing = SoftenFloatOperand(N, i);
         Changed = true;
         break;
-      case ExpandFloat:
+      case TargetLowering::TypeExpandFloat:
         NeedsReanalyzing = ExpandFloatOperand(N, i);
         Changed = true;
         break;
-      case ScalarizeVector:
+      case TargetLowering::TypeScalarizeVector:
         NeedsReanalyzing = ScalarizeVectorOperand(N, i);
         Changed = true;
         break;
-      case SplitVector:
+      case TargetLowering::TypeSplitVector:
         NeedsReanalyzing = SplitVectorOperand(N, i);
         Changed = true;
         break;
-      case WidenVector:
+      case TargetLowering::TypeWidenVector:
         NeedsReanalyzing = WidenVectorOperand(N, i);
         Changed = true;
         break;
@@ -714,6 +710,11 @@ void DAGTypeLegalizer::ReplaceValueWith(SDValue From, SDValue To) {
           if (M->getNodeId() == Processed)
             RemapValue(NewVal);
           DAG.ReplaceAllUsesOfValueWith(OldVal, NewVal, &NUL);
+          // OldVal may be a target of the ReplacedValues map which was marked
+          // NewNode to force reanalysis because it was updated.  Ensure that
+          // anything that ReplacedValues mapped to OldVal will now be mapped
+          // all the way to NewVal.
+          ReplacedValues[OldVal] = NewVal;
         }
         // The original node continues to exist in the DAG, marked NewNode.
       }
@@ -747,7 +748,11 @@ void DAGTypeLegalizer::SetSoftenedFloat(SDValue Op, SDValue Result) {
 }
 
 void DAGTypeLegalizer::SetScalarizedVector(SDValue Op, SDValue Result) {
-  assert(Result.getValueType() == Op.getValueType().getVectorElementType() &&
+  // Note that in some cases vector operation operands may be greater than
+  // the vector element type. For example BUILD_VECTOR of type <1 x i1> with
+  // a constant i8 operand.
+  assert(Result.getValueType().getSizeInBits() >=
+         Op.getValueType().getVectorElementType().getSizeInBits() &&
          "Invalid type for scalarized vector");
   AnalyzeNewValue(Result);
 
@@ -858,7 +863,7 @@ void DAGTypeLegalizer::SetWidenedVector(SDValue Op, SDValue Result) {
 /// BitConvertToInteger - Convert to an integer of the same size.
 SDValue DAGTypeLegalizer::BitConvertToInteger(SDValue Op) {
   unsigned BitWidth = Op.getValueType().getSizeInBits();
-  return DAG.getNode(ISD::BIT_CONVERT, Op.getDebugLoc(),
+  return DAG.getNode(ISD::BITCAST, Op.getDebugLoc(),
                      EVT::getIntegerVT(*DAG.getContext(), BitWidth), Op);
 }
 
@@ -869,7 +874,7 @@ SDValue DAGTypeLegalizer::BitConvertVectorToIntegerVector(SDValue Op) {
   unsigned EltWidth = Op.getValueType().getVectorElementType().getSizeInBits();
   EVT EltNVT = EVT::getIntegerVT(*DAG.getContext(), EltWidth);
   unsigned NumElts = Op.getValueType().getVectorNumElements();
-  return DAG.getNode(ISD::BIT_CONVERT, Op.getDebugLoc(),
+  return DAG.getNode(ISD::BITCAST, Op.getDebugLoc(),
                      EVT::getVectorVT(*DAG.getContext(), EltNVT, NumElts), Op);
 }
 
@@ -880,10 +885,11 @@ SDValue DAGTypeLegalizer::CreateStackStoreLoad(SDValue Op,
   // the source and destination types.
   SDValue StackPtr = DAG.CreateStackTemporary(Op.getValueType(), DestVT);
   // Emit a store to the stack slot.
-  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Op, StackPtr, NULL, 0,
-                               false, false, 0);
+  SDValue Store = DAG.getStore(DAG.getEntryNode(), dl, Op, StackPtr,
+                               MachinePointerInfo(), false, false, 0);
   // Result is a load from the stack slot.
-  return DAG.getLoad(DestVT, dl, Store, StackPtr, NULL, 0, false, false, 0);
+  return DAG.getLoad(DestVT, dl, Store, StackPtr, MachinePointerInfo(),
+                     false, false, false, 0);
 }
 
 /// CustomLowerNode - Replace the node's results with custom code provided
@@ -938,6 +944,13 @@ bool DAGTypeLegalizer::CustomWidenLowerNode(SDNode *N, EVT VT) {
   for (unsigned i = 0, e = Results.size(); i != e; ++i)
     SetWidenedVector(SDValue(N, i), Results[i]);
   return true;
+}
+
+SDValue DAGTypeLegalizer::DisintegrateMERGE_VALUES(SDNode *N, unsigned ResNo) {
+  for (unsigned i = 0, e = N->getNumValues(); i != e; ++i)
+    if (i != ResNo)
+      ReplaceValueWith(SDValue(N, i), SDValue(N->getOperand(i)));
+  return SDValue(N, ResNo);
 }
 
 /// GetSplitDestVTs - Compute the VTs needed for the low/hi parts of a type
@@ -1040,13 +1053,46 @@ SDValue DAGTypeLegalizer::MakeLibCall(RTLIB::Libcall LC, EVT RetVT,
   SDValue Callee = DAG.getExternalSymbol(TLI.getLibcallName(LC),
                                          TLI.getPointerTy());
 
-  const Type *RetTy = RetVT.getTypeForEVT(*DAG.getContext());
+  Type *RetTy = RetVT.getTypeForEVT(*DAG.getContext());
   std::pair<SDValue,SDValue> CallInfo =
     TLI.LowerCallTo(DAG.getEntryNode(), RetTy, isSigned, !isSigned, false,
-                    false, 0, TLI.getLibcallCallingConv(LC), false,
-                    /*isReturnValueUsed=*/true,
+                    false, 0, TLI.getLibcallCallingConv(LC),
+                    /*isTailCall=*/false,
+                    /*doesNotReturn=*/false, /*isReturnValueUsed=*/true,
                     Callee, Args, DAG, dl);
   return CallInfo.first;
+}
+
+// ExpandChainLibCall - Expand a node into a call to a libcall. Similar to
+// ExpandLibCall except that the first operand is the in-chain.
+std::pair<SDValue, SDValue>
+DAGTypeLegalizer::ExpandChainLibCall(RTLIB::Libcall LC,
+                                         SDNode *Node,
+                                         bool isSigned) {
+  SDValue InChain = Node->getOperand(0);
+
+  TargetLowering::ArgListTy Args;
+  TargetLowering::ArgListEntry Entry;
+  for (unsigned i = 1, e = Node->getNumOperands(); i != e; ++i) {
+    EVT ArgVT = Node->getOperand(i).getValueType();
+    Type *ArgTy = ArgVT.getTypeForEVT(*DAG.getContext());
+    Entry.Node = Node->getOperand(i);
+    Entry.Ty = ArgTy;
+    Entry.isSExt = isSigned;
+    Entry.isZExt = !isSigned;
+    Args.push_back(Entry);
+  }
+  SDValue Callee = DAG.getExternalSymbol(TLI.getLibcallName(LC),
+                                         TLI.getPointerTy());
+
+  Type *RetTy = Node->getValueType(0).getTypeForEVT(*DAG.getContext());
+  std::pair<SDValue, SDValue> CallInfo =
+    TLI.LowerCallTo(InChain, RetTy, isSigned, !isSigned, false, false,
+                    0, TLI.getLibcallCallingConv(LC), /*isTailCall=*/false,
+                    /*doesNotReturn=*/false, /*isReturnValueUsed=*/true,
+                    Callee, Args, DAG, Node->getDebugLoc());
+
+  return CallInfo;
 }
 
 /// PromoteTargetBoolean - Promote the given target boolean to a target boolean
@@ -1054,24 +1100,8 @@ SDValue DAGTypeLegalizer::MakeLibCall(RTLIB::Libcall LC, EVT RetVT,
 /// type i1, the bits of which conform to getBooleanContents.
 SDValue DAGTypeLegalizer::PromoteTargetBoolean(SDValue Bool, EVT VT) {
   DebugLoc dl = Bool.getDebugLoc();
-  ISD::NodeType ExtendCode;
-  switch (TLI.getBooleanContents()) {
-  default:
-    assert(false && "Unknown BooleanContent!");
-  case TargetLowering::UndefinedBooleanContent:
-    // Extend to VT by adding rubbish bits.
-    ExtendCode = ISD::ANY_EXTEND;
-    break;
-  case TargetLowering::ZeroOrOneBooleanContent:
-    // Extend to VT by adding zero bits.
-    ExtendCode = ISD::ZERO_EXTEND;
-    break;
-  case TargetLowering::ZeroOrNegativeOneBooleanContent: {
-    // Extend to VT by copying the sign bit.
-    ExtendCode = ISD::SIGN_EXTEND;
-    break;
-  }
-  }
+  ISD::NodeType ExtendCode =
+    TargetLowering::getExtendForContent(TLI.getBooleanContents(VT.isVector()));
   return DAG.getNode(ExtendCode, dl, VT, Bool);
 }
 

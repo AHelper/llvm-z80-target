@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=x86 | FileCheck %s
+; RUN: llc < %s -mtriple=i686-linux | FileCheck %s
 ; Check the register copy comes after the call to f and before the call to g
 ; PR3784
 
@@ -24,9 +24,13 @@ cont2:		; preds = %cont
 
 lpad:		; preds = %cont, %entry
 	%y = phi i32 [ %a, %entry ], [ %aa, %cont ]		; <i32> [#uses=1]
+        %exn = landingpad {i8*, i32} personality i32 (...)* @__gxx_personality_v0
+                 cleanup
 	ret i32 %y
 }
 
 ; CHECK: call{{.*}}f
-; CHECK-NEXT: Ltmp0:
-; CHECK-NEXT: movl %eax, %esi
+; CHECK: movl %eax, %esi
+; CHECK: call{{.*}}g
+
+declare i32 @__gxx_personality_v0(...)

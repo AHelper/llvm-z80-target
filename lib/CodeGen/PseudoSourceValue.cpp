@@ -18,7 +18,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/System/Mutex.h"
+#include "llvm/Support/Mutex.h"
 #include <map>
 using namespace llvm;
 
@@ -87,7 +87,6 @@ bool PseudoSourceValue::isConstant(const MachineFrameInfo *) const {
       this == getJumpTable())
     return true;
   llvm_unreachable("Unknown PseudoSourceValue!");
-  return false;
 }
 
 bool PseudoSourceValue::isAliased(const MachineFrameInfo *MFI) const {
@@ -97,7 +96,6 @@ bool PseudoSourceValue::isAliased(const MachineFrameInfo *MFI) const {
       this == getJumpTable())
     return false;
   llvm_unreachable("Unknown PseudoSourceValue!");
-  return true;
 }
 
 bool PseudoSourceValue::mayAlias(const MachineFrameInfo *MFI) const {

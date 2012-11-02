@@ -1,4 +1,4 @@
-//===- PPCInstrInfo.h - PowerPC Instruction Information ---------*- C++ -*-===//
+//===-- PPCInstrInfo.h - PowerPC Instruction Information --------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -11,12 +11,15 @@
 //
 //===----------------------------------------------------------------------===//
 
-#ifndef POWERPC32_INSTRUCTIONINFO_H
-#define POWERPC32_INSTRUCTIONINFO_H
+#ifndef POWERPC_INSTRUCTIONINFO_H
+#define POWERPC_INSTRUCTIONINFO_H
 
 #include "PPC.h"
-#include "llvm/Target/TargetInstrInfo.h"
 #include "PPCRegisterInfo.h"
+#include "llvm/Target/TargetInstrInfo.h"
+
+#define GET_INSTRINFO_HEADER
+#include "PPCGenInstrInfo.inc"
 
 namespace llvm {
 
@@ -32,7 +35,7 @@ enum {
   /// PPC970_First - This instruction starts a new dispatch group, so it will
   /// always be the first one in the group.
   PPC970_First = 0x1,
-  
+
   /// PPC970_Single - This instruction starts a new dispatch group and
   /// terminates it, so it will be the sole instruction in the group.
   PPC970_Single = 0x2,
@@ -40,7 +43,7 @@ enum {
   /// PPC970_Cracked - This instruction is cracked into two pieces, requiring
   /// two dispatch pipes to be available to issue.
   PPC970_Cracked = 0x4,
-  
+
   /// PPC970_Mask/Shift - This is a bitmask that selects the pipeline type that
   /// an instruction is issued to.
   PPC970_Shift = 3,
@@ -58,10 +61,10 @@ enum PPC970_Unit {
   PPC970_VPERM  = 6 << PPC970_Shift,   // Vector Permute Unit
   PPC970_BRU    = 7 << PPC970_Shift    // Branch Unit
 };
-}
-  
-  
-class PPCInstrInfo : public TargetInstrInfoImpl {
+} // end namespace PPCII
+
+
+class PPCInstrInfo : public PPCGenInstrInfo {
   PPCTargetMachine &TM;
   const PPCRegisterInfo RI;
 
@@ -69,7 +72,7 @@ class PPCInstrInfo : public TargetInstrInfoImpl {
                            unsigned SrcReg, bool isKill, int FrameIdx,
                            const TargetRegisterClass *RC,
                            SmallVectorImpl<MachineInstr*> &NewMIs) const;
-  void LoadRegFromStackSlot(MachineFunction &MF, DebugLoc DL, 
+  bool LoadRegFromStackSlot(MachineFunction &MF, DebugLoc DL,
                             unsigned DestReg, int FrameIdx,
                             const TargetRegisterClass *RC,
                             SmallVectorImpl<MachineInstr*> &NewMIs) const;
@@ -82,11 +85,12 @@ public:
   ///
   virtual const PPCRegisterInfo &getRegisterInfo() const { return RI; }
 
-  /// Return true if the instruction is a register to register move and return
-  /// the source and dest operands and their sub-register indices by reference.
-  virtual bool isMoveInstr(const MachineInstr &MI,
-                           unsigned &SrcReg, unsigned &DstReg,
-                           unsigned &SrcSubIdx, unsigned &DstSubIdx) const;
+  ScheduleHazardRecognizer *
+  CreateTargetHazardRecognizer(const TargetMachine *TM,
+                               const ScheduleDAG *DAG) const;
+  ScheduleHazardRecognizer *
+  CreateTargetPostRAHazardRecognizer(const InstrItineraryData *II,
+                                     const ScheduleDAG *DAG) const;
 
   unsigned isLoadFromStackSlot(const MachineInstr *MI,
                                int &FrameIndex) const;
@@ -96,8 +100,8 @@ public:
   // commuteInstruction - We can commute rlwimi instructions, but only if the
   // rotate amt is zero.  We also have to munge the immediates a bit.
   virtual MachineInstr *commuteInstruction(MachineInstr *MI, bool NewMI) const;
-  
-  virtual void insertNoop(MachineBasicBlock &MBB, 
+
+  virtual void insertNoop(MachineBasicBlock &MBB,
                           MachineBasicBlock::iterator MI) const;
 
 
@@ -111,13 +115,11 @@ public:
                                 MachineBasicBlock *FBB,
                                 const SmallVectorImpl<MachineOperand> &Cond,
                                 DebugLoc DL) const;
-  virtual bool copyRegToReg(MachineBasicBlock &MBB,
-                            MachineBasicBlock::iterator MI,
-                            unsigned DestReg, unsigned SrcReg,
-                            const TargetRegisterClass *DestRC,
-                            const TargetRegisterClass *SrcRC,
-                            DebugLoc DL) const;
-  
+  virtual void copyPhysReg(MachineBasicBlock &MBB,
+                           MachineBasicBlock::iterator I, DebugLoc DL,
+                           unsigned DestReg, unsigned SrcReg,
+                           bool KillSrc) const;
+
   virtual void storeRegToStackSlot(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator MBBI,
                                    unsigned SrcReg, bool isKill, int FrameIndex,
@@ -129,33 +131,16 @@ public:
                                     unsigned DestReg, int FrameIndex,
                                     const TargetRegisterClass *RC,
                                     const TargetRegisterInfo *TRI) const;
-  
+
   virtual MachineInstr *emitFrameIndexDebugValue(MachineFunction &MF,
                                                  int FrameIx,
                                                  uint64_t Offset,
                                                  const MDNode *MDPtr,
                                                  DebugLoc DL) const;
 
-  /// foldMemoryOperand - PowerPC (like most RISC's) can only fold spills into
-  /// copy instructions, turning them into load/store instructions.
-  virtual MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
-                                              MachineInstr* MI,
-                                              const SmallVectorImpl<unsigned> &Ops,
-                                              int FrameIndex) const;
-
-  virtual MachineInstr* foldMemoryOperandImpl(MachineFunction &MF,
-                                              MachineInstr* MI,
-                                              const SmallVectorImpl<unsigned> &Ops,
-                                              MachineInstr* LoadMI) const {
-    return 0;
-  }
-
-  virtual bool canFoldMemoryOperand(const MachineInstr *MI,
-                                    const SmallVectorImpl<unsigned> &Ops) const;
-  
   virtual
   bool ReverseBranchCondition(SmallVectorImpl<MachineOperand> &Cond) const;
-  
+
   /// GetInstSize - Return the number of bytes of code the specified
   /// instruction may be.  This returns the maximum number of bytes.
   ///

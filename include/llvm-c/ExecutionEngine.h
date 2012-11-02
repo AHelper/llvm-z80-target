@@ -26,6 +26,13 @@
 extern "C" {
 #endif
 
+/**
+ * @defgroup LLVMCExecutionEngine Execution Engine
+ * @ingroup LLVMC
+ *
+ * @{
+ */
+
 void LLVMLinkInJIT(void);
 void LLVMLinkInInterpreter(void);
 
@@ -116,12 +123,18 @@ LLVMBool LLVMRemoveModuleProvider(LLVMExecutionEngineRef EE,
 LLVMBool LLVMFindFunction(LLVMExecutionEngineRef EE, const char *Name,
                           LLVMValueRef *OutFn);
 
+void *LLVMRecompileAndRelinkFunction(LLVMExecutionEngineRef EE, LLVMValueRef Fn);
+
 LLVMTargetDataRef LLVMGetExecutionEngineTargetData(LLVMExecutionEngineRef EE);
 
 void LLVMAddGlobalMapping(LLVMExecutionEngineRef EE, LLVMValueRef Global,
                           void* Addr);
 
 void *LLVMGetPointerToGlobal(LLVMExecutionEngineRef EE, LLVMValueRef Global);
+
+/**
+ * @}
+ */
 
 #ifdef __cplusplus
 }

@@ -29,13 +29,13 @@
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/Support/ValueHandle.h"
 #include "llvm/Support/type_traits.h"
-#include "llvm/System/Mutex.h"
+#include "llvm/Support/Mutex.h"
 
 #include <iterator>
 
 namespace llvm {
 
-template<typename KeyT, typename ValueT, typename Config, typename ValueInfoT>
+template<typename KeyT, typename ValueT, typename Config>
 class ValueMapCallbackVH;
 
 template<typename DenseMapT, typename KeyT>
@@ -72,22 +72,20 @@ struct ValueMapConfig {
 };
 
 /// See the file comment.
-template<typename KeyT, typename ValueT, typename Config = ValueMapConfig<KeyT>,
-         typename ValueInfoT = DenseMapInfo<ValueT> >
+template<typename KeyT, typename ValueT, typename Config =ValueMapConfig<KeyT> >
 class ValueMap {
-  friend class ValueMapCallbackVH<KeyT, ValueT, Config, ValueInfoT>;
-  typedef ValueMapCallbackVH<KeyT, ValueT, Config, ValueInfoT> ValueMapCVH;
-  typedef DenseMap<ValueMapCVH, ValueT, DenseMapInfo<ValueMapCVH>,
-                   ValueInfoT> MapT;
+  friend class ValueMapCallbackVH<KeyT, ValueT, Config>;
+  typedef ValueMapCallbackVH<KeyT, ValueT, Config> ValueMapCVH;
+  typedef DenseMap<ValueMapCVH, ValueT, DenseMapInfo<ValueMapCVH> > MapT;
   typedef typename Config::ExtraData ExtraData;
   MapT Map;
   ExtraData Data;
+  ValueMap(const ValueMap&); // DO NOT IMPLEMENT
+  ValueMap& operator=(const ValueMap&); // DO NOT IMPLEMENT
 public:
   typedef KeyT key_type;
   typedef ValueT mapped_type;
   typedef std::pair<KeyT, ValueT> value_type;
-
-  ValueMap(const ValueMap& Other) : Map(Other.Map), Data(Other.Data) {}
 
   explicit ValueMap(unsigned NumInitBuckets = 64)
     : Map(NumInitBuckets), Data() {}
@@ -149,7 +147,7 @@ public:
   bool erase(const KeyT &Val) {
     return Map.erase(Wrap(Val));
   }
-  bool erase(iterator I) {
+  void erase(iterator I) {
     return Map.erase(I.base());
   }
 
@@ -159,12 +157,6 @@ public:
 
   ValueT &operator[](const KeyT &Key) {
     return Map[Wrap(Key)];
-  }
-
-  ValueMap& operator=(const ValueMap& Other) {
-    Map = Other.Map;
-    Data = Other.Data;
-    return *this;
   }
 
   /// isPointerIntoBucketsArray - Return true if the specified pointer points
@@ -196,11 +188,11 @@ private:
 
 // This CallbackVH updates its ValueMap when the contained Value changes,
 // according to the user's preferences expressed through the Config object.
-template<typename KeyT, typename ValueT, typename Config, typename ValueInfoT>
+template<typename KeyT, typename ValueT, typename Config>
 class ValueMapCallbackVH : public CallbackVH {
-  friend class ValueMap<KeyT, ValueT, Config, ValueInfoT>;
+  friend class ValueMap<KeyT, ValueT, Config>;
   friend struct DenseMapInfo<ValueMapCallbackVH>;
-  typedef ValueMap<KeyT, ValueT, Config, ValueInfoT> ValueMapT;
+  typedef ValueMap<KeyT, ValueT, Config> ValueMapT;
   typedef typename llvm::remove_pointer<KeyT>::type KeySansPointerT;
 
   ValueMapT *Map;
@@ -250,15 +242,9 @@ public:
   }
 };
 
-  
-template<typename KeyT, typename ValueT, typename Config, typename ValueInfoT>
-struct isPodLike<ValueMapCallbackVH<KeyT, ValueT, Config, ValueInfoT> > {
-  static const bool value = true;
-};
-
-template<typename KeyT, typename ValueT, typename Config, typename ValueInfoT>
-struct DenseMapInfo<ValueMapCallbackVH<KeyT, ValueT, Config, ValueInfoT> > {
-  typedef ValueMapCallbackVH<KeyT, ValueT, Config, ValueInfoT> VH;
+template<typename KeyT, typename ValueT, typename Config>
+struct DenseMapInfo<ValueMapCallbackVH<KeyT, ValueT, Config> > {
+  typedef ValueMapCallbackVH<KeyT, ValueT, Config> VH;
   typedef DenseMapInfo<KeyT> PointerInfo;
 
   static inline VH getEmptyKey() {

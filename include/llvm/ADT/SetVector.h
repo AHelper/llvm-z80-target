@@ -114,13 +114,15 @@ public:
   }
 
   /// @brief Remove an item from the set vector.
-  void remove(const value_type& X) {
+  bool remove(const value_type& X) {
     if (set_.erase(X)) {
       typename vector_type::iterator I =
         std::find(vector_.begin(), vector_.end(), X);
       assert(I != vector_.end() && "Corrupted SetVector instances!");
       vector_.erase(I);
+      return true;
     }
+    return false;
   }
 
 
@@ -141,6 +143,12 @@ public:
     assert(!empty() && "Cannot remove an element from an empty SetVector!");
     set_.erase(back());
     vector_.pop_back();
+  }
+  
+  T pop_back_val() {
+    T Ret = back();
+    pop_back();
+    return Ret;
   }
 
   bool operator==(const SetVector &that) const {

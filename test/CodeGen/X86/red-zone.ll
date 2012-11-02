@@ -1,4 +1,4 @@
-; RUN: llc < %s -march=x86-64 | FileCheck %s
+; RUN: llc < %s -mcpu=generic -mtriple=x86_64-linux | FileCheck %s
 
 ; First without noredzone.
 ; CHECK: f0:

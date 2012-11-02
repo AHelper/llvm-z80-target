@@ -9,7 +9,7 @@ target datalayout = "E-p:64:64:64-i1:8:8-i8:8:8-i16:16:16-i32:32:32-i64:32:64-f3
 @Y = internal global [3 x %struct.X] zeroinitializer
 
 define void @frob() {
-; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 0), align 8
+; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 0), align 16
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 0), align 4
 ; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 1), align 4
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 1), align 4
@@ -33,7 +33,7 @@ define void @frob() {
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 10), align 4
 ; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 1, i32 1, i64 2), align 4
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 11), align 4
-; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 2, i32 0, i64 0), align 8
+; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 2, i32 0, i64 0), align 16
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 12), align 4
 ; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 0, i64 2, i32 0, i64 1), align 4
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 13), align 4
@@ -47,9 +47,28 @@ define void @frob() {
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 17), align 8
 ; CHECK: store i32 1, i32* getelementptr inbounds ([3 x %struct.X]* @Y, i64 1, i64 0, i32 0, i64 0), align 8
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 18), align 8
-; CHECK: store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 2, i64 0, i32 0, i64 0), align 8
+; CHECK: store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 2, i64 0, i32 0, i64 0), align 16
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 36), align 8
 ; CHECK: store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 1, i64 0, i32 0, i64 1), align 8
   store i32 1, i32* getelementptr ([3 x %struct.X]* @Y, i64 0, i64 0, i32 0, i64 19), align 8
   ret void
+}
+
+
+; PR8883 - Constant fold exotic gep subtract
+; CHECK: @test2
+@X = global [1000 x i8] zeroinitializer, align 16
+
+define i64 @test2() {
+entry:
+  %A = bitcast i8* getelementptr inbounds ([1000 x i8]* @X, i64 1, i64 0) to i8*
+  %B = bitcast i8* getelementptr inbounds ([1000 x i8]* @X, i64 0, i64 0) to i8*
+
+  %B2 = ptrtoint i8* %B to i64
+  %C = sub i64 0, %B2
+  %D = getelementptr i8* %A, i64 %C
+  %E = ptrtoint i8* %D to i64
+
+  ret i64 %E
+  ; CHECK: ret i64 1000
 }

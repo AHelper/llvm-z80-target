@@ -32,8 +32,10 @@
 #include "llvm/CodeGen/MachineBasicBlock.h"
 #include "llvm/CodeGen/MachineFunctionPass.h"
 #include "llvm/CodeGen/MachineInstr.h"
+#include "llvm/Target/TargetRegisterInfo.h"
 #include "llvm/ADT/BitVector.h"
 #include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/IndexedMap.h"
 #include "llvm/ADT/SmallSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/SparseBitVector.h"
@@ -46,7 +48,9 @@ class TargetRegisterInfo;
 class LiveVariables : public MachineFunctionPass {
 public:
   static char ID; // Pass identification, replacement for typeid
-  LiveVariables() : MachineFunctionPass(&ID) {}
+  LiveVariables() : MachineFunctionPass(ID) {
+    initializeLiveVariablesPass(*PassRegistry::getPassRegistry());
+  }
 
   /// VarInfo - This represents the regions where a virtual register is live in
   /// the program.  We represent this with three different pieces of
@@ -81,16 +85,10 @@ public:
     ///
     SparseBitVector<> AliveBlocks;
 
-    /// NumUses - Number of uses of this register across the entire function.
-    ///
-    unsigned NumUses;
-
     /// Kills - List of MachineInstruction's which are the last use of this
     /// virtual register (kill it) in their basic block.
     ///
     std::vector<MachineInstr*> Kills;
-
-    VarInfo() : NumUses(0) {}
 
     /// removeKill - Delete a kill corresponding to the specified
     /// machine instruction. Returns true if there was a kill
@@ -119,10 +117,9 @@ public:
 
 private:
   /// VirtRegInfo - This list is a mapping from virtual register number to
-  /// variable information.  FirstVirtualRegister is subtracted from the virtual
-  /// register number before indexing into this list.
+  /// variable information.
   ///
-  std::vector<VarInfo> VirtRegInfo;
+  IndexedMap<VarInfo, VirtReg2IndexFunctor> VirtRegInfo;
 
   /// PHIJoins - list of virtual registers that are PHI joins. These registers
   /// may have multiple definitions, and they require special handling when
@@ -162,6 +159,9 @@ private:   // Intermediate data structures
   /// uses. Pay special attention to the sub-register uses which may come below
   /// the last use of the whole register.
   bool HandlePhysRegKill(unsigned Reg, MachineInstr *MI);
+
+  /// HandleRegMask - Call HandlePhysRegKill for all registers clobbered by Mask.
+  void HandleRegMask(const MachineOperand&);
 
   void HandlePhysRegUse(unsigned Reg, MachineInstr *MI);
   void HandlePhysRegDef(unsigned Reg, MachineInstr *MI,
@@ -228,6 +228,7 @@ public:
     }
 
     assert(Removed && "Register is not used by this instruction!");
+    (void)Removed;
     return true;
   }
 
@@ -262,6 +263,7 @@ public:
       }
     }
     assert(Removed && "Register is not defined by this instruction!");
+    (void)Removed;
     return true;
   }
   

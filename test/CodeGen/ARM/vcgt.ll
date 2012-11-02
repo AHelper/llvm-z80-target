@@ -1,4 +1,5 @@
 ; RUN: llc < %s -march=arm -mattr=+neon | FileCheck %s
+; RUN: llc < %s -march=arm -mattr=+neon -regalloc=basic | FileCheck %s
 
 define <8 x i8> @vcgts8(<8 x i8>* %A, <8 x i8>* %B) nounwind {
 ;CHECK: vcgts8:
@@ -161,9 +162,9 @@ define <4 x i32> @vacgtQf32(<4 x float>* %A, <4 x float>* %B) nounwind {
 ; rdar://7923010
 define <4 x i32> @vcgt_zext(<4 x float>* %A, <4 x float>* %B) nounwind {
 ;CHECK: vcgt_zext:
-;CHECK: vcgt.f32 q0
-;CHECK: vmov.i32 q1, #0x1
-;CHECK: vand q0, q0, q1
+;CHECK: vmov.i32 [[Q0:q[0-9]+]], #0x1
+;CHECK: vcgt.f32 [[Q1:q[0-9]+]]
+;CHECK: vand [[Q2:q[0-9]+]], [[Q1]], [[Q0]]
 	%tmp1 = load <4 x float>* %A
 	%tmp2 = load <4 x float>* %B
 	%tmp3 = fcmp ogt <4 x float> %tmp1, %tmp2
@@ -173,3 +174,25 @@ define <4 x i32> @vcgt_zext(<4 x float>* %A, <4 x float>* %B) nounwind {
 
 declare <2 x i32> @llvm.arm.neon.vacgtd(<2 x float>, <2 x float>) nounwind readnone
 declare <4 x i32> @llvm.arm.neon.vacgtq(<4 x float>, <4 x float>) nounwind readnone
+
+define <8 x i8> @vcgti8Z(<8 x i8>* %A) nounwind {
+;CHECK: vcgti8Z:
+;CHECK-NOT: vmov
+;CHECK-NOT: vmvn
+;CHECK: vcgt.s8
+	%tmp1 = load <8 x i8>* %A
+	%tmp3 = icmp sgt <8 x i8> %tmp1, <i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0>
+        %tmp4 = sext <8 x i1> %tmp3 to <8 x i8>
+	ret <8 x i8> %tmp4
+}
+
+define <8 x i8> @vclti8Z(<8 x i8>* %A) nounwind {
+;CHECK: vclti8Z:
+;CHECK-NOT: vmov
+;CHECK-NOT: vmvn
+;CHECK: vclt.s8
+	%tmp1 = load <8 x i8>* %A
+	%tmp3 = icmp slt <8 x i8> %tmp1, <i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0, i8 0>
+        %tmp4 = sext <8 x i1> %tmp3 to <8 x i8>
+	ret <8 x i8> %tmp4
+}

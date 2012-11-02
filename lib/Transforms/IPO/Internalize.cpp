@@ -63,11 +63,12 @@ namespace {
 } // end anonymous namespace
 
 char InternalizePass::ID = 0;
-static RegisterPass<InternalizePass>
-X("internalize", "Internalize Global Symbols");
+INITIALIZE_PASS(InternalizePass, "internalize",
+                "Internalize Global Symbols", false, false)
 
 InternalizePass::InternalizePass(bool AllButMain)
-  : ModulePass(&ID), AllButMain(AllButMain){
+  : ModulePass(ID), AllButMain(AllButMain){
+  initializeInternalizePassPass(*PassRegistry::getPassRegistry());
   if (!APIFile.empty())           // If a filename is specified, use it.
     LoadFile(APIFile.c_str());
   if (!APIList.empty())           // If a list is specified, use it as well.
@@ -75,7 +76,8 @@ InternalizePass::InternalizePass(bool AllButMain)
 }
 
 InternalizePass::InternalizePass(const std::vector<const char *>&exportList)
-  : ModulePass(&ID), AllButMain(false){
+  : ModulePass(ID), AllButMain(false){
+  initializeInternalizePassPass(*PassRegistry::getPassRegistry());
   for(std::vector<const char *>::const_iterator itr = exportList.begin();
         itr != exportList.end(); itr++) {
     ExternalNames.insert(*itr);
@@ -120,10 +122,17 @@ bool InternalizePass::runOnModule(Module &M) {
 
   bool Changed = false;
 
+  // Never internalize functions which code-gen might insert.
+  // FIXME: We should probably add this (and the __stack_chk_guard) via some
+  // type of call-back in CodeGen.
+  ExternalNames.insert("__stack_chk_fail");
+
   // Mark all functions not in the api as internal.
   // FIXME: maybe use private linkage?
   for (Module::iterator I = M.begin(), E = M.end(); I != E; ++I)
     if (!I->isDeclaration() &&         // Function must be defined here
+        // Available externally is really just a "declaration with a body".
+        !I->hasAvailableExternallyLinkage() &&
         !I->hasLocalLinkage() &&  // Can't already have internal linkage
         !ExternalNames.count(I->getName())) {// Not marked to keep external?
       I->setLinkage(GlobalValue::InternalLinkage);
@@ -142,13 +151,12 @@ bool InternalizePass::runOnModule(Module &M) {
 
   // Never internalize anchors used by the machine module info, else the info
   // won't find them.  (see MachineModuleInfo.)
-  ExternalNames.insert("llvm.dbg.compile_units");
-  ExternalNames.insert("llvm.dbg.global_variables");
-  ExternalNames.insert("llvm.dbg.subprograms");
   ExternalNames.insert("llvm.global_ctors");
   ExternalNames.insert("llvm.global_dtors");
-  ExternalNames.insert("llvm.noinline");
   ExternalNames.insert("llvm.global.annotations");
+
+  // Never internalize symbols code-gen inserts.
+  ExternalNames.insert("__stack_chk_guard");
 
   // Mark all global variables with initializers that are not in the api as
   // internal as well.

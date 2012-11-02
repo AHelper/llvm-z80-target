@@ -28,7 +28,7 @@ namespace {
   // for miscompilation.
   //
   enum OutputType {
-    AutoPick, RunLLI, RunJIT, RunLLC, RunLLCIA, RunCBE, CBE_bug, LLC_Safe,Custom
+    AutoPick, RunLLI, RunJIT, RunLLC, RunLLCIA, LLC_Safe, CompileCustom, Custom
   };
 
   cl::opt<double>
@@ -47,9 +47,10 @@ namespace {
                             clEnumValN(RunLLC, "run-llc", "Compile with LLC"),
                             clEnumValN(RunLLCIA, "run-llc-ia",
                                   "Compile with LLC with integrated assembler"),
-                            clEnumValN(RunCBE, "run-cbe", "Compile with CBE"),
-                            clEnumValN(CBE_bug,"cbe-bug", "Find CBE bugs"),
                             clEnumValN(LLC_Safe, "llc-safe", "Use LLC for all"),
+                            clEnumValN(CompileCustom, "compile-custom",
+                            "Use -compile-command to define a command to "
+                            "compile the bitcode. Useful to avoid linking."),
                             clEnumValN(Custom, "run-custom",
                             "Use -exec-command to define a command to execute "
                             "the bitcode. Useful for cross-compilation."),
@@ -60,7 +61,6 @@ namespace {
   SafeInterpreterSel(cl::desc("Specify \"safe\" i.e. known-good backend:"),
               cl::values(clEnumValN(AutoPick, "safe-auto", "Use best guess"),
                          clEnumValN(RunLLC, "safe-run-llc", "Compile with LLC"),
-                         clEnumValN(RunCBE, "safe-run-cbe", "Compile with CBE"),
                          clEnumValN(Custom, "safe-run-custom",
                          "Use -exec-command to define a command to execute "
                          "the bitcode. Useful for cross-compilation."),
@@ -87,8 +87,13 @@ namespace {
                          "into executing programs"));
 
   cl::list<std::string>
-  AdditionalLinkerArgs("Xlinker", 
+  AdditionalLinkerArgs("Xlinker",
       cl::desc("Additional arguments to pass to the linker"));
+
+  cl::opt<std::string>
+  CustomCompileCommand("compile-command", cl::init("llc"),
+      cl::desc("Command to compile the bitcode (use with -compile-custom) "
+               "(default: llc)"));
 
   cl::opt<std::string>
   CustomExecCommand("exec-command", cl::init("simulate"),
@@ -119,7 +124,7 @@ namespace {
                cl::ZeroOrMore, cl::PositionalEatsArgs);
 
   cl::opt<std::string>
-  GCCBinary("gcc", cl::init("gcc"), 
+  GCCBinary("gcc", cl::init("gcc"),
               cl::desc("The gcc binary to use. (default 'gcc')"));
 
   cl::list<std::string>
@@ -145,10 +150,6 @@ bool BugDriver::initializeExecutionEnvironment() {
 
   switch (InterpreterSel) {
   case AutoPick:
-    InterpreterSel = RunCBE;
-    Interpreter =
-      AbstractInterpreter::createCBE(getToolName(), Message, GCCBinary,
-                                     &ToolArgv, &GCCToolArgv);
     if (!Interpreter) {
       InterpreterSel = RunJIT;
       Interpreter = AbstractInterpreter::createJIT(getToolName(), Message,
@@ -157,7 +158,7 @@ bool BugDriver::initializeExecutionEnvironment() {
     if (!Interpreter) {
       InterpreterSel = RunLLC;
       Interpreter = AbstractInterpreter::createLLC(getToolName(), Message,
-                                                   GCCBinary, &ToolArgv, 
+                                                   GCCBinary, &ToolArgv,
                                                    &GCCToolArgv);
     }
     if (!Interpreter) {
@@ -178,7 +179,7 @@ bool BugDriver::initializeExecutionEnvironment() {
   case RunLLCIA:
   case LLC_Safe:
     Interpreter = AbstractInterpreter::createLLC(getToolName(), Message,
-                                                 GCCBinary, &ToolArgv, 
+                                                 GCCBinary, &ToolArgv,
                                                  &GCCToolArgv,
                                                  InterpreterSel == RunLLCIA);
     break;
@@ -186,17 +187,13 @@ bool BugDriver::initializeExecutionEnvironment() {
     Interpreter = AbstractInterpreter::createJIT(getToolName(), Message,
                                                  &ToolArgv);
     break;
-  case RunCBE:
-  case CBE_bug:
-    Interpreter = AbstractInterpreter::createCBE(getToolName(), Message,
-                                                 GCCBinary, &ToolArgv, 
-                                                 &GCCToolArgv);
+  case CompileCustom:
+    Interpreter =
+      AbstractInterpreter::createCustomCompiler(Message, CustomCompileCommand);
     break;
   case Custom:
-    Interpreter = AbstractInterpreter::createCustom(Message, CustomExecCommand);
-    break;
-  default:
-    Message = "Sorry, this back-end is not supported by bugpoint right now!\n";
+    Interpreter =
+      AbstractInterpreter::createCustomExecutor(Message, CustomExecCommand);
     break;
   }
   if (!Interpreter)
@@ -210,46 +207,24 @@ bool BugDriver::initializeExecutionEnvironment() {
   std::vector<std::string> SafeToolArgs = SafeToolArgv;
   switch (SafeInterpreterSel) {
   case AutoPick:
-    // In "cbe-bug" mode, default to using LLC as the "safe" backend.
-    if (!SafeInterpreter &&
-        InterpreterSel == CBE_bug) {
-      SafeInterpreterSel = RunLLC;
-      SafeToolArgs.push_back("--relocation-model=pic");
-      SafeInterpreter = AbstractInterpreter::createLLC(Path.c_str(), Message,
-                                                       GCCBinary, 
-                                                       &SafeToolArgs,
-                                                       &GCCToolArgv);
-    }
-
     // In "llc-safe" mode, default to using LLC as the "safe" backend.
     if (!SafeInterpreter &&
         InterpreterSel == LLC_Safe) {
       SafeInterpreterSel = RunLLC;
       SafeToolArgs.push_back("--relocation-model=pic");
       SafeInterpreter = AbstractInterpreter::createLLC(Path.c_str(), Message,
-                                                       GCCBinary, 
-                                                       &SafeToolArgs,
-                                                       &GCCToolArgv);
-    }
-
-    // Pick a backend that's different from the test backend. The JIT and
-    // LLC backends share a lot of code, so prefer to use the CBE as the
-    // safe back-end when testing them.
-    if (!SafeInterpreter &&
-        InterpreterSel != RunCBE) {
-      SafeInterpreterSel = RunCBE;
-      SafeInterpreter = AbstractInterpreter::createCBE(Path.c_str(), Message,
                                                        GCCBinary,
                                                        &SafeToolArgs,
                                                        &GCCToolArgv);
     }
+
     if (!SafeInterpreter &&
         InterpreterSel != RunLLC &&
         InterpreterSel != RunJIT) {
       SafeInterpreterSel = RunLLC;
       SafeToolArgs.push_back("--relocation-model=pic");
       SafeInterpreter = AbstractInterpreter::createLLC(Path.c_str(), Message,
-                                                       GCCBinary, 
+                                                       GCCBinary,
                                                        &SafeToolArgs,
                                                        &GCCToolArgv);
     }
@@ -266,14 +241,9 @@ bool BugDriver::initializeExecutionEnvironment() {
                                                      &GCCToolArgv,
                                                 SafeInterpreterSel == RunLLCIA);
     break;
-  case RunCBE:
-    SafeInterpreter = AbstractInterpreter::createCBE(Path.c_str(), Message,
-                                                     GCCBinary, &SafeToolArgs,
-                                                     &GCCToolArgv);
-    break;
   case Custom:
-    SafeInterpreter = AbstractInterpreter::createCustom(Message,
-                                                        CustomExecCommand);
+    SafeInterpreter =
+      AbstractInterpreter::createCustomExecutor(Message, CustomExecCommand);
     break;
   default:
     Message = "Sorry, this back-end is not supported by bugpoint as the "
@@ -281,7 +251,7 @@ bool BugDriver::initializeExecutionEnvironment() {
     break;
   }
   if (!SafeInterpreter) { outs() << Message << "\nExiting.\n"; exit(1); }
-  
+
   gcc = GCC::create(Message, GCCBinary, &GCCToolArgv);
   if (!gcc) { outs() << Message << "\nExiting.\n"; exit(1); }
 
@@ -293,12 +263,12 @@ bool BugDriver::initializeExecutionEnvironment() {
 /// setting Error if an error occurs.  This is used for code generation
 /// crash testing.
 ///
-void BugDriver::compileProgram(Module *M, std::string *Error) {
+void BugDriver::compileProgram(Module *M, std::string *Error) const {
   // Emit the program to a bitcode file...
   sys::Path BitcodeFile (OutputPrefix + "-test-program.bc");
   std::string ErrMsg;
   if (BitcodeFile.makeUnique(true, &ErrMsg)) {
-    errs() << ToolName << ": Error making unique filename: " << ErrMsg 
+    errs() << ToolName << ": Error making unique filename: " << ErrMsg
            << "\n";
     exit(1);
   }
@@ -309,7 +279,7 @@ void BugDriver::compileProgram(Module *M, std::string *Error) {
   }
 
   // Remove the temporary bitcode file when we are done.
-  FileRemover BitcodeFileRemover(BitcodeFile, !SaveTemps);
+  FileRemover BitcodeFileRemover(BitcodeFile.str(), !SaveTemps);
 
   // Actually compile the program!
   Interpreter->compileProgram(BitcodeFile.str(), Error, Timeout, MemoryLimit);
@@ -320,11 +290,12 @@ void BugDriver::compileProgram(Module *M, std::string *Error) {
 /// program to a file, returning the filename of the file.  A recommended
 /// filename may be optionally specified.
 ///
-std::string BugDriver::executeProgram(std::string OutputFile,
+std::string BugDriver::executeProgram(const Module *Program,
+                                      std::string OutputFile,
                                       std::string BitcodeFile,
                                       const std::string &SharedObj,
                                       AbstractInterpreter *AI,
-                                      std::string *Error) {
+                                      std::string *Error) const {
   if (AI == 0) AI = Interpreter;
   assert(AI && "Interpreter should have been created already!");
   bool CreatedBitcode = false;
@@ -349,7 +320,8 @@ std::string BugDriver::executeProgram(std::string OutputFile,
 
   // Remove the temporary bitcode file when we are done.
   sys::Path BitcodePath(BitcodeFile);
-  FileRemover BitcodeFileRemover(BitcodePath, CreatedBitcode && !SaveTemps);
+  FileRemover BitcodeFileRemover(BitcodePath.str(),
+    CreatedBitcode && !SaveTemps);
 
   if (OutputFile.empty()) OutputFile = OutputPrefix + "-execution-output";
 
@@ -399,9 +371,10 @@ std::string BugDriver::executeProgram(std::string OutputFile,
 /// executeProgramSafely - Used to create reference output with the "safe"
 /// backend, if reference output is not provided.
 ///
-std::string BugDriver::executeProgramSafely(std::string OutputFile,
-                                            std::string *Error) {
-  return executeProgram(OutputFile, "", "", SafeInterpreter, Error);
+std::string BugDriver::executeProgramSafely(const Module *Program,
+                                            std::string OutputFile,
+                                            std::string *Error) const {
+  return executeProgram(Program, OutputFile, "", "", SafeInterpreter, Error);
 }
 
 std::string BugDriver::compileSharedObject(const std::string &BitcodeFile,
@@ -430,7 +403,7 @@ std::string BugDriver::compileSharedObject(const std::string &BitcodeFile,
 }
 
 /// createReferenceFile - calls compileProgram and then records the output
-/// into ReferenceOutputFile. Returns true if reference file created, false 
+/// into ReferenceOutputFile. Returns true if reference file created, false
 /// otherwise. Note: initializeExecutionEnvironment should be called BEFORE
 /// this function.
 ///
@@ -440,13 +413,13 @@ bool BugDriver::createReferenceFile(Module *M, const std::string &Filename) {
   if (!Error.empty())
     return false;
 
-  ReferenceOutputFile = executeProgramSafely(Filename, &Error);
+  ReferenceOutputFile = executeProgramSafely(Program, Filename, &Error);
   if (!Error.empty()) {
     errs() << Error;
     if (Interpreter != SafeInterpreter) {
       errs() << "*** There is a bug running the \"safe\" backend.  Either"
-             << " debug it (for example with the -run-cbe bugpoint option,"
-             << " if CBE is being used as the \"safe\" backend), or fix the"
+             << " debug it (for example with the -run-jit bugpoint option,"
+             << " if JIT is being used as the \"safe\" backend), or fix the"
              << " error some other way.\n";
     }
     return false;
@@ -458,14 +431,16 @@ bool BugDriver::createReferenceFile(Module *M, const std::string &Filename) {
 /// diffProgram - This method executes the specified module and diffs the
 /// output against the file specified by ReferenceOutputFile.  If the output
 /// is different, 1 is returned.  If there is a problem with the code
-/// generator (e.g., llc crashes), this will return -1 and set Error.
+/// generator (e.g., llc crashes), this will set ErrMsg.
 ///
-bool BugDriver::diffProgram(const std::string &BitcodeFile,
+bool BugDriver::diffProgram(const Module *Program,
+                            const std::string &BitcodeFile,
                             const std::string &SharedObject,
                             bool RemoveBitcode,
-                            std::string *ErrMsg) {
+                            std::string *ErrMsg) const {
   // Execute the program, generating an output file...
-  sys::Path Output(executeProgram("", BitcodeFile, SharedObject, 0, ErrMsg));
+  sys::Path Output(executeProgram(Program, "", BitcodeFile, SharedObject, 0,
+                                  ErrMsg));
   if (!ErrMsg->empty())
     return false;
 

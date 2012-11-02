@@ -15,9 +15,8 @@
 #include "llvm/Transforms/Utils/Cloning.h"
 #include "llvm/Module.h"
 #include "llvm/DerivedTypes.h"
-#include "llvm/TypeSymbolTable.h"
 #include "llvm/Constant.h"
-#include "ValueMapper.h"
+#include "llvm/Transforms/Utils/ValueMapper.h"
 using namespace llvm;
 
 /// CloneModule - Return an exact copy of the specified module.  This is not as
@@ -32,20 +31,13 @@ Module *llvm::CloneModule(const Module *M) {
   return CloneModule(M, VMap);
 }
 
-Module *llvm::CloneModule(const Module *M,
-                          ValueToValueMapTy &VMap) {
-  // First off, we need to create the new module...
+Module *llvm::CloneModule(const Module *M, ValueToValueMapTy &VMap) {
+  // First off, we need to create the new module.
   Module *New = new Module(M->getModuleIdentifier(), M->getContext());
   New->setDataLayout(M->getDataLayout());
   New->setTargetTriple(M->getTargetTriple());
   New->setModuleInlineAsm(M->getModuleInlineAsm());
-
-  // Copy all of the type symbol table entries over.
-  const TypeSymbolTable &TST = M->getTypeSymbolTable();
-  for (TypeSymbolTable::const_iterator TI = TST.begin(), TE = TST.end(); 
-       TI != TE; ++TI)
-    New->addTypeName(TI->first, TI->second);
-  
+   
   // Copy all of the dependent libraries over.
   for (Module::lib_iterator I = M->lib_begin(), E = M->lib_end(); I != E; ++I)
     New->addLibrary(*I);
@@ -58,10 +50,12 @@ Module *llvm::CloneModule(const Module *M,
        I != E; ++I) {
     GlobalVariable *GV = new GlobalVariable(*New, 
                                             I->getType()->getElementType(),
-                                            false,
-                                            GlobalValue::ExternalLinkage, 0,
-                                            I->getName());
-    GV->setAlignment(I->getAlignment());
+                                            I->isConstant(), I->getLinkage(),
+                                            (Constant*) 0, I->getName(),
+                                            (GlobalVariable*) 0,
+                                            I->isThreadLocal(),
+                                            I->getType()->getAddressSpace());
+    GV->copyAttributesFrom(I);
     VMap[I] = GV;
   }
 
@@ -69,16 +63,19 @@ Module *llvm::CloneModule(const Module *M,
   for (Module::const_iterator I = M->begin(), E = M->end(); I != E; ++I) {
     Function *NF =
       Function::Create(cast<FunctionType>(I->getType()->getElementType()),
-                       GlobalValue::ExternalLinkage, I->getName(), New);
+                       I->getLinkage(), I->getName(), New);
     NF->copyAttributesFrom(I);
     VMap[I] = NF;
   }
 
   // Loop over the aliases in the module
   for (Module::const_alias_iterator I = M->alias_begin(), E = M->alias_end();
-       I != E; ++I)
-    VMap[I] = new GlobalAlias(I->getType(), GlobalAlias::ExternalLinkage,
-                                  I->getName(), NULL, New);
+       I != E; ++I) {
+    GlobalAlias *GA = new GlobalAlias(I->getType(), I->getLinkage(),
+                                      I->getName(), NULL, New);
+    GA->copyAttributesFrom(I);
+    VMap[I] = GA;
+  }
   
   // Now that all of the things that global variable initializer can refer to
   // have been created, loop through and copy the global variable referrers
@@ -88,11 +85,7 @@ Module *llvm::CloneModule(const Module *M,
        I != E; ++I) {
     GlobalVariable *GV = cast<GlobalVariable>(VMap[I]);
     if (I->hasInitializer())
-      GV->setInitializer(cast<Constant>(MapValue(I->getInitializer(),
-                                                 VMap)));
-    GV->setLinkage(I->getLinkage());
-    GV->setThreadLocal(I->isThreadLocal());
-    GV->setConstant(I->isConstant());
+      GV->setInitializer(MapValue(I->getInitializer(), VMap));
   }
 
   // Similarly, copy over function bodies now...
@@ -108,46 +101,26 @@ Module *llvm::CloneModule(const Module *M,
       }
 
       SmallVector<ReturnInst*, 8> Returns;  // Ignore returns cloned.
-      CloneFunctionInto(F, I, VMap, Returns);
+      CloneFunctionInto(F, I, VMap, /*ModuleLevelChanges=*/true, Returns);
     }
-
-    F->setLinkage(I->getLinkage());
   }
 
   // And aliases
   for (Module::const_alias_iterator I = M->alias_begin(), E = M->alias_end();
        I != E; ++I) {
     GlobalAlias *GA = cast<GlobalAlias>(VMap[I]);
-    GA->setLinkage(I->getLinkage());
-    if (const Constant* C = I->getAliasee())
-      GA->setAliasee(cast<Constant>(MapValue(C, VMap)));
+    if (const Constant *C = I->getAliasee())
+      GA->setAliasee(MapValue(C, VMap));
   }
 
   // And named metadata....
   for (Module::const_named_metadata_iterator I = M->named_metadata_begin(),
          E = M->named_metadata_end(); I != E; ++I) {
     const NamedMDNode &NMD = *I;
-    SmallVector<MDNode*, 4> MDs;
+    NamedMDNode *NewNMD = New->getOrInsertNamedMetadata(NMD.getName());
     for (unsigned i = 0, e = NMD.getNumOperands(); i != e; ++i)
-      MDs.push_back(cast<MDNode>(MapValue(NMD.getOperand(i), VMap)));
-    NamedMDNode::Create(New->getContext(), NMD.getName(),
-                        MDs.data(), MDs.size(), New);
+      NewNMD->addOperand(MapValue(NMD.getOperand(i), VMap));
   }
 
-  // Update metadata attach with instructions.
-  for (Module::iterator MI = New->begin(), ME = New->end(); MI != ME; ++MI)   
-    for (Function::iterator FI = MI->begin(), FE = MI->end(); 
-         FI != FE; ++FI)
-      for (BasicBlock::iterator BI = FI->begin(), BE = FI->end(); 
-           BI != BE; ++BI) {
-        SmallVector<std::pair<unsigned, MDNode *>, 4 > MDs;
-        BI->getAllMetadata(MDs);
-        for (SmallVector<std::pair<unsigned, MDNode *>, 4>::iterator 
-               MDI = MDs.begin(), MDE = MDs.end(); MDI != MDE; ++MDI) {
-          Value *MappedValue = MapValue(MDI->second, VMap);
-          if (MDI->second != MappedValue && MappedValue)
-            BI->setMetadata(MDI->first, cast<MDNode>(MappedValue));
-        }
-      }
   return New;
 }

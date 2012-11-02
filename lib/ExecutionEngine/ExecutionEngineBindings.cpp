@@ -76,9 +76,7 @@ double LLVMGenericValueToFloat(LLVMTypeRef TyRef, LLVMGenericValueRef GenVal) {
     return unwrap(GenVal)->DoubleVal;
   default:
     llvm_unreachable("LLVMGenericValueToFloat supports only float and double.");
-    break;
   }
-  return 0; // Not reached
 }
 
 void LLVMDisposeGenericValue(LLVMGenericValueRef GenVal) {
@@ -234,6 +232,10 @@ LLVMBool LLVMFindFunction(LLVMExecutionEngineRef EE, const char *Name,
     return 0;
   }
   return 1;
+}
+
+void *LLVMRecompileAndRelinkFunction(LLVMExecutionEngineRef EE, LLVMValueRef Fn) {
+  return unwrap(EE)->recompileAndRelinkFunction(unwrap<Function>(Fn));
 }
 
 LLVMTargetDataRef LLVMGetExecutionEngineTargetData(LLVMExecutionEngineRef EE) {

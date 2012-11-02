@@ -84,7 +84,8 @@ public:
 
     // Loop through the basic block until we find A or B.
     MachineBasicBlock::iterator I = BBA->begin();
-    for (; &*I != A && &*I != B; ++I) /*empty*/;
+    for (; &*I != A && &*I != B; ++I)
+      /*empty*/ ;
 
     //if(!DT.IsPostDominators) {
       // A dominates B if it is found first in the basic block.
@@ -145,7 +146,7 @@ public:
   }
   
   /// eraseNode - Removes a node from  the dominator tree. Block must not
-  /// domiante any other blocks. Removes node from its immediate dominator's
+  /// dominate any other blocks. Removes node from its immediate dominator's
   /// children list. Deletes dominator node associated with basic block BB.
   inline void eraseNode(MachineBasicBlock *BB) {
     DT->eraseNode(BB);

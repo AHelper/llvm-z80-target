@@ -14,11 +14,12 @@
 #ifndef LLVM_ADT_BITVECTOR_H
 #define LLVM_ADT_BITVECTOR_H
 
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include <algorithm>
 #include <cassert>
 #include <climits>
-#include <cstring>
+#include <cstdlib>
 
 namespace llvm {
 
@@ -77,7 +78,7 @@ public:
   /// bits are initialized to the specified value.
   explicit BitVector(unsigned s, bool t = false) : Size(s) {
     Capacity = NumBitWords(s);
-    Bits = new BitWord[Capacity];
+    Bits = (BitWord *)std::malloc(Capacity * sizeof(BitWord));
     init_words(Bits, Capacity, t);
     if (t)
       clear_unused_bits();
@@ -92,12 +93,12 @@ public:
     }
 
     Capacity = NumBitWords(RHS.size());
-    Bits = new BitWord[Capacity];
-    std::copy(RHS.Bits, &RHS.Bits[Capacity], Bits);
+    Bits = (BitWord *)std::malloc(Capacity * sizeof(BitWord));
+    std::memcpy(Bits, RHS.Bits, Capacity * sizeof(BitWord));
   }
 
   ~BitVector() {
-    delete[] Bits;
+    std::free(Bits);
   }
 
   /// empty - Tests whether there are no bits in this bitvector.
@@ -115,7 +116,7 @@ public:
       else if (sizeof(BitWord) == 8)
         NumBits += CountPopulation_64(Bits[i]);
       else
-        assert(0 && "Unsupported!");
+        llvm_unreachable("Unsupported!");
     return NumBits;
   }
 
@@ -125,6 +126,12 @@ public:
       if (Bits[i] != 0)
         return true;
     return false;
+  }
+
+  /// all - Returns true if all bits are set.
+  bool all() const {
+    // TODO: Optimize this.
+    return count() == size();
   }
 
   /// none - Returns true if none of the bits are set.
@@ -139,10 +146,9 @@ public:
       if (Bits[i] != 0) {
         if (sizeof(BitWord) == 4)
           return i * BITWORD_SIZE + CountTrailingZeros_32((uint32_t)Bits[i]);
-        else if (sizeof(BitWord) == 8)
+        if (sizeof(BitWord) == 8)
           return i * BITWORD_SIZE + CountTrailingZeros_64(Bits[i]);
-        else
-          assert(0 && "Unsupported!");
+        llvm_unreachable("Unsupported!");
       }
     return -1;
   }
@@ -163,10 +169,9 @@ public:
     if (Copy != 0) {
       if (sizeof(BitWord) == 4)
         return WordPos * BITWORD_SIZE + CountTrailingZeros_32((uint32_t)Copy);
-      else if (sizeof(BitWord) == 8)
+      if (sizeof(BitWord) == 8)
         return WordPos * BITWORD_SIZE + CountTrailingZeros_64(Copy);
-      else
-        assert(0 && "Unsupported!");
+      llvm_unreachable("Unsupported!");
     }
 
     // Check subsequent words.
@@ -174,10 +179,9 @@ public:
       if (Bits[i] != 0) {
         if (sizeof(BitWord) == 4)
           return i * BITWORD_SIZE + CountTrailingZeros_32((uint32_t)Bits[i]);
-        else if (sizeof(BitWord) == 8)
+        if (sizeof(BitWord) == 8)
           return i * BITWORD_SIZE + CountTrailingZeros_64(Bits[i]);
-        else
-          assert(0 && "Unsupported!");
+        llvm_unreachable("Unsupported!");
       }
     return -1;
   }
@@ -311,6 +315,16 @@ public:
     return *this;
   }
 
+  // reset - Reset bits that are set in RHS. Same as *this &= ~RHS.
+  BitVector &reset(const BitVector &RHS) {
+    unsigned ThisWords = NumBitWords(size());
+    unsigned RHSWords  = NumBitWords(RHS.size());
+    unsigned i;
+    for (i = 0; i != std::min(ThisWords, RHSWords); ++i)
+      Bits[i] &= ~RHS.Bits[i];
+    return *this;
+  }
+
   BitVector &operator|=(const BitVector &RHS) {
     if (size() < RHS.size())
       resize(RHS.size());
@@ -335,18 +349,18 @@ public:
     unsigned RHSWords = NumBitWords(Size);
     if (Size <= Capacity * BITWORD_SIZE) {
       if (Size)
-        std::copy(RHS.Bits, &RHS.Bits[RHSWords], Bits);
+        std::memcpy(Bits, RHS.Bits, RHSWords * sizeof(BitWord));
       clear_unused_bits();
       return *this;
     }
 
     // Grow the bitvector to have enough elements.
     Capacity = RHSWords;
-    BitWord *NewBits = new BitWord[Capacity];
-    std::copy(RHS.Bits, &RHS.Bits[RHSWords], NewBits);
+    BitWord *NewBits = (BitWord *)std::malloc(Capacity * sizeof(BitWord));
+    std::memcpy(NewBits, RHS.Bits, Capacity * sizeof(BitWord));
 
     // Destroy the old bits.
-    delete[] Bits;
+    std::free(Bits);
     Bits = NewBits;
 
     return *this;
@@ -356,6 +370,42 @@ public:
     std::swap(Bits, RHS.Bits);
     std::swap(Size, RHS.Size);
     std::swap(Capacity, RHS.Capacity);
+  }
+
+  //===--------------------------------------------------------------------===//
+  // Portable bit mask operations.
+  //===--------------------------------------------------------------------===//
+  //
+  // These methods all operate on arrays of uint32_t, each holding 32 bits. The
+  // fixed word size makes it easier to work with literal bit vector constants
+  // in portable code.
+  //
+  // The LSB in each word is the lowest numbered bit.  The size of a portable
+  // bit mask is always a whole multiple of 32 bits.  If no bit mask size is
+  // given, the bit mask is assumed to cover the entire BitVector.
+
+  /// setBitsInMask - Add '1' bits from Mask to this vector. Don't resize.
+  /// This computes "*this |= Mask".
+  void setBitsInMask(const uint32_t *Mask, unsigned MaskWords = ~0u) {
+    applyMask<true, false>(Mask, MaskWords);
+  }
+
+  /// clearBitsInMask - Clear any bits in this vector that are set in Mask.
+  /// Don't resize. This computes "*this &= ~Mask".
+  void clearBitsInMask(const uint32_t *Mask, unsigned MaskWords = ~0u) {
+    applyMask<false, false>(Mask, MaskWords);
+  }
+
+  /// setBitsNotInMask - Add a bit to this vector for every '0' bit in Mask.
+  /// Don't resize.  This computes "*this |= ~Mask".
+  void setBitsNotInMask(const uint32_t *Mask, unsigned MaskWords = ~0u) {
+    applyMask<true, true>(Mask, MaskWords);
+  }
+
+  /// clearBitsNotInMask - Clear a bit in this vector for every '0' bit in Mask.
+  /// Don't resize.  This computes "*this &= Mask".
+  void clearBitsNotInMask(const uint32_t *Mask, unsigned MaskWords = ~0u) {
+    applyMask<false, true>(Mask, MaskWords);
   }
 
 private:
@@ -384,23 +434,41 @@ private:
   }
 
   void grow(unsigned NewSize) {
-    unsigned OldCapacity = Capacity;
-    Capacity = NumBitWords(NewSize);
-    BitWord *NewBits = new BitWord[Capacity];
-
-    // Copy the old bits over.
-    if (OldCapacity != 0)
-      std::copy(Bits, &Bits[OldCapacity], NewBits);
-
-    // Destroy the old bits.
-    delete[] Bits;
-    Bits = NewBits;
+    Capacity = std::max(NumBitWords(NewSize), Capacity * 2);
+    Bits = (BitWord *)std::realloc(Bits, Capacity * sizeof(BitWord));
 
     clear_unused_bits();
   }
 
   void init_words(BitWord *B, unsigned NumWords, bool t) {
     memset(B, 0 - (int)t, NumWords*sizeof(BitWord));
+  }
+
+  template<bool AddBits, bool InvertMask>
+  void applyMask(const uint32_t *Mask, unsigned MaskWords) {
+    assert(BITWORD_SIZE % 32 == 0 && "Unsupported BitWord size.");
+    MaskWords = std::min(MaskWords, (size() + 31) / 32);
+    const unsigned Scale = BITWORD_SIZE / 32;
+    unsigned i;
+    for (i = 0; MaskWords >= Scale; ++i, MaskWords -= Scale) {
+      BitWord BW = Bits[i];
+      // This inner loop should unroll completely when BITWORD_SIZE > 32.
+      for (unsigned b = 0; b != BITWORD_SIZE; b += 32) {
+        uint32_t M = *Mask++;
+        if (InvertMask) M = ~M;
+        if (AddBits) BW |=   BitWord(M) << b;
+        else         BW &= ~(BitWord(M) << b);
+      }
+      Bits[i] = BW;
+    }
+    for (unsigned b = 0; MaskWords; b += 32, --MaskWords) {
+      uint32_t M = *Mask++;
+      if (InvertMask) M = ~M;
+      if (AddBits) Bits[i] |=   BitWord(M) << b;
+      else         Bits[i] &= ~(BitWord(M) << b);
+    }
+    if (AddBits)
+      clear_unused_bits();
   }
 };
 

@@ -11,17 +11,18 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MBlaze.h"
-#include "MBlazeMCAsmInfo.h"
 #include "MBlazeTargetMachine.h"
+#include "MBlaze.h"
 #include "llvm/PassManager.h"
-#include "llvm/Target/TargetRegistry.h"
+#include "llvm/CodeGen/Passes.h"
+#include "llvm/Support/FormattedStream.h"
+#include "llvm/Support/TargetRegistry.h"
+#include "llvm/Target/TargetOptions.h"
 using namespace llvm;
 
 extern "C" void LLVMInitializeMBlazeTarget() {
   // Register the target.
   RegisterTargetMachine<MBlazeTargetMachine> X(TheMBlazeTarget);
-  RegisterAsmInfo<MBlazeMCAsmInfo> A(TheMBlazeTarget);
 }
 
 // DataLayout --> Big-endian, 32-bit pointer/ABI/alignment
@@ -31,36 +32,50 @@ extern "C" void LLVMInitializeMBlazeTarget() {
 // offset from the stack/frame pointer, using StackGrowsUp enables
 // an easier handling.
 MBlazeTargetMachine::
-MBlazeTargetMachine(const Target &T, const std::string &TT,
-                    const std::string &FS):
-  LLVMTargetMachine(T, TT),
-  Subtarget(TT, FS),
-  DataLayout("E-p:32:32-i8:8:8-i16:16:16-i64:32:32-"
-             "f64:32:32-v64:32:32-v128:32:32-n32"),
-  InstrInfo(*this),
-  FrameInfo(TargetFrameInfo::StackGrowsUp, 8, 0),
-  TLInfo(*this), TSInfo(*this) {
-  if (getRelocationModel() == Reloc::Default) {
-      setRelocationModel(Reloc::Static);
+MBlazeTargetMachine(const Target &T, StringRef TT,
+                    StringRef CPU, StringRef FS, const TargetOptions &Options,
+                    Reloc::Model RM, CodeModel::Model CM,
+                    CodeGenOpt::Level OL)
+  : LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL),
+    Subtarget(TT, CPU, FS),
+    DataLayout("E-p:32:32:32-i8:8:8-i16:16:16"),
+    InstrInfo(*this),
+    FrameLowering(Subtarget),
+    TLInfo(*this), TSInfo(*this), ELFWriterInfo(*this),
+    InstrItins(Subtarget.getInstrItineraryData()) {
+}
+
+namespace {
+/// MBlaze Code Generator Pass Configuration Options.
+class MBlazePassConfig : public TargetPassConfig {
+public:
+  MBlazePassConfig(MBlazeTargetMachine *TM, PassManagerBase &PM)
+    : TargetPassConfig(TM, PM) {}
+
+  MBlazeTargetMachine &getMBlazeTargetMachine() const {
+    return getTM<MBlazeTargetMachine>();
   }
 
-  if (getCodeModel() == CodeModel::Default)
-    setCodeModel(CodeModel::Small);
+  virtual bool addInstSelector();
+  virtual bool addPreEmitPass();
+};
+} // namespace
+
+TargetPassConfig *MBlazeTargetMachine::createPassConfig(PassManagerBase &PM) {
+  return new MBlazePassConfig(this, PM);
 }
 
 // Install an instruction selector pass using
 // the ISelDag to gen MBlaze code.
-bool MBlazeTargetMachine::
-addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel) {
-  PM.add(createMBlazeISelDag(*this));
+bool MBlazePassConfig::addInstSelector() {
+  PM->add(createMBlazeISelDag(getMBlazeTargetMachine()));
   return false;
 }
 
 // Implemented by targets that want to run passes immediately before
 // machine code is emitted. return true if -print-machineinstrs should
 // print out the code after the passes.
-bool MBlazeTargetMachine::
-addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel) {
-  PM.add(createMBlazeDelaySlotFillerPass(*this));
+bool MBlazePassConfig::addPreEmitPass() {
+  PM->add(createMBlazeDelaySlotFillerPass(getMBlazeTargetMachine()));
   return true;
 }

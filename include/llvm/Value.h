@@ -14,11 +14,8 @@
 #ifndef LLVM_VALUE_H
 #define LLVM_VALUE_H
 
-#include "llvm/AbstractTypeUser.h"
 #include "llvm/Use.h"
-#include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
-#include <string>
 
 namespace llvm {
 
@@ -32,10 +29,7 @@ class GlobalVariable;
 class GlobalAlias;
 class InlineAsm;
 class ValueSymbolTable;
-class TypeSymbolTable;
 template<typename ValueTy> class StringMapEntry;
-template <typename ValueTy = Value>
-class AssertingVH;
 typedef StringMapEntry<Value*> ValueName;
 class raw_ostream;
 class AssemblyAnnotationWriter;
@@ -43,6 +37,8 @@ class ValueHandleBase;
 class LLVMContext;
 class Twine;
 class MDNode;
+class Type;
+class StringRef;
 
 //===----------------------------------------------------------------------===//
 //                                 Value Class
@@ -51,8 +47,8 @@ class MDNode;
 /// This is a very important LLVM class. It is the base class of all values 
 /// computed by a program that may be used as operands to other values. Value is
 /// the super class of other important classes such as Instruction and Function.
-/// All Values have a Type. Type is not a subclass of Value. All types can have
-/// a name and they should belong to some Module. Setting the name on the Value
+/// All Values have a Type. Type is not a subclass of Value. Some values can
+/// have a name and they belong to some Module.  Setting the name on the Value
 /// automatically updates the module's symbol table.
 ///
 /// Every value has a "use list" that keeps track of which other Values are
@@ -77,12 +73,11 @@ private:
   /// This field is initialized to zero by the ctor.
   unsigned short SubclassData;
 
-  PATypeHolder VTy;
+  Type *VTy;
   Use *UseList;
 
   friend class ValueSymbolTable; // Allow ValueSymbolTable to directly mod Name.
   friend class ValueHandleBase;
-  friend class AbstractTypeUser;
   ValueName *Name;
 
   void operator=(const Value &);     // Do not implement
@@ -93,7 +88,7 @@ protected:
   /// printing behavior.
   virtual void printCustom(raw_ostream &O) const;
 
-  Value(const Type *Ty, unsigned scid);
+  Value(Type *Ty, unsigned scid);
 public:
   virtual ~Value();
 
@@ -107,30 +102,20 @@ public:
 
   /// All values are typed, get the type of this value.
   ///
-  inline const Type *getType() const { return VTy; }
+  Type *getType() const { return VTy; }
 
   /// All values hold a context through their type.
   LLVMContext &getContext() const;
 
-  // All values can potentially be named...
-  inline bool hasName() const { return Name != 0; }
+  // All values can potentially be named.
+  bool hasName() const { return Name != 0 && SubclassID != MDStringVal; }
   ValueName *getValueName() const { return Name; }
+  void setValueName(ValueName *VN) { Name = VN; }
   
   /// getName() - Return a constant reference to the value's name. This is cheap
   /// and guaranteed to return the same reference as long as the value is not
   /// modified.
-  ///
-  /// This is currently guaranteed to return a StringRef for which data() points
-  /// to a valid null terminated string. The use of StringRef.data() is 
-  /// deprecated here, however, and clients should not rely on it. If such 
-  /// behavior is needed, clients should use expensive getNameStr(), or switch 
-  /// to an interface that does not depend on null termination.
   StringRef getName() const;
-
-  /// getNameStr() - Return the name of the specified value, *constructing a
-  /// string* to hold it.  This is guaranteed to construct a string and is very
-  /// expensive, clients should use getName() unless necessary.
-  std::string getNameStr() const;
 
   /// setName() - Change the name of the value, choosing a new unique name if
   /// the provided name is taken.
@@ -148,10 +133,6 @@ public:
   /// use list is guaranteed to be empty.
   ///
   void replaceAllUsesWith(Value *V);
-
-  // uncheckedReplaceAllUsesWith - Just like replaceAllUsesWith but dangerous.
-  // Only use when in type resolution situations!
-  void uncheckedReplaceAllUsesWith(Value *V);
 
   //----------------------------------------------------------------------
   // Methods for handling the chain of uses of this Value.
@@ -189,7 +170,7 @@ public:
   bool isUsedInBasicBlock(const BasicBlock *BB) const;
 
   /// getNumUses - This method computes the number of uses of this Value.  This
-  /// is a linear time operation.  Use hasOneUse, hasNUses, or hasMoreThanNUses
+  /// is a linear time operation.  Use hasOneUse, hasNUses, or hasNUsesOrMore
   /// to check for specific values.
   unsigned getNumUses() const;
 
@@ -211,16 +192,16 @@ public:
     BlockAddressVal,          // This is an instance of BlockAddress
     ConstantExprVal,          // This is an instance of ConstantExpr
     ConstantAggregateZeroVal, // This is an instance of ConstantAggregateZero
+    ConstantDataArrayVal,     // This is an instance of ConstantDataArray
+    ConstantDataVectorVal,    // This is an instance of ConstantDataVector
     ConstantIntVal,           // This is an instance of ConstantInt
     ConstantFPVal,            // This is an instance of ConstantFP
     ConstantArrayVal,         // This is an instance of ConstantArray
     ConstantStructVal,        // This is an instance of ConstantStruct
-    ConstantUnionVal,         // This is an instance of ConstantUnion
     ConstantVectorVal,        // This is an instance of ConstantVector
     ConstantPointerNullVal,   // This is an instance of ConstantPointerNull
     MDNodeVal,                // This is an instance of MDNode
     MDStringVal,              // This is an instance of MDString
-    NamedMDNodeVal,           // This is an instance of NamedMDNode
     InlineAsmVal,             // This is an instance of InlineAsm
     PseudoSourceValueVal,     // This is an instance of PseudoSourceValue
     FixedStackPseudoSourceValueVal, // This is an instance of 
@@ -254,6 +235,12 @@ public:
     return SubclassOptionalData;
   }
 
+  /// clearSubclassOptionalData - Clear the optional flags contained in
+  /// this value.
+  void clearSubclassOptionalData() {
+    SubclassOptionalData = 0;
+  }
+
   /// hasSameSubclassOptionalData - Test whether the optional flags contained
   /// in this value are equal to the optional flags in the given value.
   bool hasSameSubclassOptionalData(const Value *V) const {
@@ -266,32 +253,44 @@ public:
     SubclassOptionalData &= V->SubclassOptionalData;
   }
 
+  /// hasValueHandle - Return true if there is a value handle associated with
+  /// this value.
+  bool hasValueHandle() const { return HasValueHandle; }
+  
   // Methods for support type inquiry through isa, cast, and dyn_cast:
   static inline bool classof(const Value *) {
     return true; // Values are always values.
   }
 
-  /// getRawType - This should only be used to implement the vmcore library.
-  ///
-  const Type *getRawType() const { return VTy.getRawType(); }
-
-  /// stripPointerCasts - This method strips off any unneeded pointer
-  /// casts from the specified value, returning the original uncasted value.
-  /// Note that the returned value has pointer type if the specified value does.
+  /// stripPointerCasts - This method strips off any unneeded pointer casts and
+  /// all-zero GEPs from the specified value, returning the original uncasted
+  /// value. If this is called on a non-pointer value, it returns 'this'.
   Value *stripPointerCasts();
   const Value *stripPointerCasts() const {
     return const_cast<Value*>(this)->stripPointerCasts();
   }
 
-  /// getUnderlyingObject - This method strips off any GEP address adjustments
-  /// and pointer casts from the specified value, returning the original object
-  /// being addressed.  Note that the returned value has pointer type if the
-  /// specified value does.  If the MaxLookup value is non-zero, it limits the
-  /// number of instructions to be stripped off.
-  Value *getUnderlyingObject(unsigned MaxLookup = 6);
-  const Value *getUnderlyingObject(unsigned MaxLookup = 6) const {
-    return const_cast<Value*>(this)->getUnderlyingObject(MaxLookup);
+  /// stripInBoundsConstantOffsets - This method strips off unneeded pointer casts and
+  /// all-constant GEPs from the specified value, returning the original
+  /// pointer value. If this is called on a non-pointer value, it returns
+  /// 'this'.
+  Value *stripInBoundsConstantOffsets();
+  const Value *stripInBoundsConstantOffsets() const {
+    return const_cast<Value*>(this)->stripInBoundsConstantOffsets();
   }
+
+  /// stripInBoundsOffsets - This method strips off unneeded pointer casts and
+  /// any in-bounds Offsets from the specified value, returning the original
+  /// pointer value. If this is called on a non-pointer value, it returns
+  /// 'this'.
+  Value *stripInBoundsOffsets();
+  const Value *stripInBoundsOffsets() const {
+    return const_cast<Value*>(this)->stripInBoundsOffsets();
+  }
+
+  /// isDereferenceablePointer - Test if this value is always a pointer to
+  /// allocated and suitably aligned memory for a simple load or store.
+  bool isDereferenceablePointer() const;
   
   /// DoPHITranslation - If this value is a PHI node with CurBB as its parent,
   /// return the value in the PHI node corresponding to PredBB.  If not, return
@@ -302,6 +301,19 @@ public:
   const Value *DoPHITranslation(const BasicBlock *CurBB,
                                 const BasicBlock *PredBB) const{
     return const_cast<Value*>(this)->DoPHITranslation(CurBB, PredBB);
+  }
+  
+  /// MaximumAlignment - This is the greatest alignment value supported by
+  /// load, store, and alloca instructions, and global values.
+  static const unsigned MaximumAlignment = 1u << 29;
+  
+  /// mutateType - Mutate the type of this Value to be of the specified type.
+  /// Note that this is an extremely dangerous operation which can create
+  /// completely invalid IR very easily.  It is strongly recommended that you
+  /// recreate IR objects with the right types instead of mutating them in
+  /// place.
+  void mutateType(Type *Ty) {
+    VTy = Ty;
   }
   
 protected:

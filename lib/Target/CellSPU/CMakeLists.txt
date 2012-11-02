@@ -1,27 +1,28 @@
 set(LLVM_TARGET_DEFINITIONS SPU.td)
 
-tablegen(SPUGenInstrNames.inc -gen-instr-enums)
-tablegen(SPUGenRegisterNames.inc -gen-register-enums)
-tablegen(SPUGenAsmWriter.inc -gen-asm-writer)
-tablegen(SPUGenCodeEmitter.inc -gen-emitter)
-tablegen(SPUGenRegisterInfo.h.inc -gen-register-desc-header)
-tablegen(SPUGenRegisterInfo.inc -gen-register-desc)
-tablegen(SPUGenInstrInfo.inc -gen-instr-desc)
-tablegen(SPUGenDAGISel.inc -gen-dag-isel)
-tablegen(SPUGenSubtarget.inc -gen-subtarget)
-tablegen(SPUGenCallingConv.inc -gen-callingconv)
+tablegen(LLVM SPUGenAsmWriter.inc -gen-asm-writer)
+tablegen(LLVM SPUGenCodeEmitter.inc -gen-emitter)
+tablegen(LLVM SPUGenRegisterInfo.inc -gen-register-info)
+tablegen(LLVM SPUGenInstrInfo.inc -gen-instr-info)
+tablegen(LLVM SPUGenDAGISel.inc -gen-dag-isel)
+tablegen(LLVM SPUGenSubtargetInfo.inc -gen-subtarget)
+tablegen(LLVM SPUGenCallingConv.inc -gen-callingconv)
+add_public_tablegen_target(CellSPUCommonTableGen)
 
 add_llvm_target(CellSPUCodeGen
-  SPUFrameInfo.cpp
+  SPUAsmPrinter.cpp
   SPUHazardRecognizers.cpp
   SPUInstrInfo.cpp
   SPUISelDAGToDAG.cpp
   SPUISelLowering.cpp
-  SPUMCAsmInfo.cpp
+  SPUFrameLowering.cpp
+  SPUMachineFunction.cpp
   SPURegisterInfo.cpp
   SPUSubtarget.cpp
   SPUTargetMachine.cpp
   SPUSelectionDAGInfo.cpp
+  SPUNopFiller.cpp
   )
 
-target_link_libraries (LLVMCellSPUCodeGen LLVMSelectionDAG)
+add_subdirectory(TargetInfo)
+add_subdirectory(MCTargetDesc)

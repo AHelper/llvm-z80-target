@@ -20,31 +20,8 @@
 #include <cstddef>
 #include <cstdlib>
 #include <cstring>
+#include <iterator>
 #include <memory>
-
-#ifdef _MSC_VER
-namespace std {
-#if _MSC_VER <= 1310
-  // Work around flawed VC++ implementation of std::uninitialized_copy.  Define
-  // additional overloads so that elements with pointer types are recognized as
-  // scalars and not objects, causing bizarre type conversion errors.
-  template<class T1, class T2>
-  inline _Scalar_ptr_iterator_tag _Ptr_cat(T1 **, T2 **) {
-    _Scalar_ptr_iterator_tag _Cat;
-    return _Cat;
-  }
-
-  template<class T1, class T2>
-  inline _Scalar_ptr_iterator_tag _Ptr_cat(T1* const *, T2 **) {
-    _Scalar_ptr_iterator_tag _Cat;
-    return _Cat;
-  }
-#else
-// FIXME: It is not clear if the problem is fixed in VS 2005.  What is clear
-// is that the above hack won't work if it wasn't fixed.
-#endif
-}
-#endif
 
 namespace llvm {
 
@@ -57,19 +34,13 @@ protected:
   // Allocate raw space for N elements of type T.  If T has a ctor or dtor, we
   // don't want it to be automatically run, so we need to represent the space as
   // something else.  An array of char would work great, but might not be
-  // aligned sufficiently.  Instead, we either use GCC extensions, or some
-  // number of union instances for the space, which guarantee maximal alignment.
-  struct U {
-#ifdef __GNUC__
-    char X __attribute__((aligned(8)));
-#else
-    union {
-      double D;
-      long double LD;
-      long long L;
-      void *P;
-    } X;
-#endif
+  // aligned sufficiently.  Instead we use some number of union instances for
+  // the space, which guarantee maximal alignment.
+  union U {
+    double D;
+    long double LD;
+    long long L;
+    void *P;
   } FirstEl;
   // Space after 'FirstEl' is clobbered, do not add any instance vars after it.
 
@@ -83,21 +54,21 @@ protected:
     return BeginX == static_cast<const void*>(&FirstEl);
   }
 
+  /// grow_pod - This is an implementation of the grow() method which only works
+  /// on POD-like data types and is out of line to reduce code duplication.
+  void grow_pod(size_t MinSizeInBytes, size_t TSize);
+
+public:
   /// size_in_bytes - This returns size()*sizeof(T).
   size_t size_in_bytes() const {
     return size_t((char*)EndX - (char*)BeginX);
   }
-
+  
   /// capacity_in_bytes - This returns capacity()*sizeof(T).
   size_t capacity_in_bytes() const {
     return size_t((char*)CapacityX - (char*)BeginX);
   }
 
-  /// grow_pod - This is an implementation of the grow() method which only works
-  /// on POD-like datatypes and is out of line to reduce code duplication.
-  void grow_pod(size_t MinSizeInBytes, size_t TSize);
-
-public:
   bool empty() const { return BeginX == EndX; }
 };
 
@@ -105,10 +76,10 @@ public:
 template <typename T>
 class SmallVectorTemplateCommon : public SmallVectorBase {
 protected:
-  void setEnd(T *P) { this->EndX = P; }
-public:
   SmallVectorTemplateCommon(size_t Size) : SmallVectorBase(Size) {}
 
+  void setEnd(T *P) { this->EndX = P; }
+public:
   typedef size_t size_type;
   typedef ptrdiff_t difference_type;
   typedef T value_type;
@@ -179,7 +150,7 @@ public:
 /// implementations that are designed to work with non-POD-like T's.
 template <typename T, bool isPodLike>
 class SmallVectorTemplateBase : public SmallVectorTemplateCommon<T> {
-public:
+protected:
   SmallVectorTemplateBase(size_t Size) : SmallVectorTemplateCommon<T>(Size) {}
 
   static void destroy_range(T *S, T *E) {
@@ -199,6 +170,23 @@ public:
   /// grow - double the size of the allocated memory, guaranteeing space for at
   /// least one more element or MinSize if specified.
   void grow(size_t MinSize = 0);
+  
+public:
+  void push_back(const T &Elt) {
+    if (this->EndX < this->CapacityX) {
+    Retry:
+      new (this->end()) T(Elt);
+      this->setEnd(this->end()+1);
+      return;
+    }
+    this->grow();
+    goto Retry;
+  }
+  
+  void pop_back() {
+    this->setEnd(this->end()-1);
+    this->end()->~T();
+  }
 };
 
 // Define this out-of-line to dissuade the C++ compiler from inlining it.
@@ -206,7 +194,7 @@ template <typename T, bool isPodLike>
 void SmallVectorTemplateBase<T, isPodLike>::grow(size_t MinSize) {
   size_t CurCapacity = this->capacity();
   size_t CurSize = this->size();
-  size_t NewCapacity = 2*CurCapacity;
+  size_t NewCapacity = 2*CurCapacity + 1; // Always grow, even from zero.
   if (NewCapacity < MinSize)
     NewCapacity = MinSize;
   T *NewElts = static_cast<T*>(malloc(NewCapacity*sizeof(T)));
@@ -231,7 +219,7 @@ void SmallVectorTemplateBase<T, isPodLike>::grow(size_t MinSize) {
 /// implementations that are designed to work with POD-like T's.
 template <typename T>
 class SmallVectorTemplateBase<T, true> : public SmallVectorTemplateCommon<T> {
-public:
+protected:
   SmallVectorTemplateBase(size_t Size) : SmallVectorTemplateCommon<T>(Size) {}
 
   // No need to do a destroy loop for POD's.
@@ -260,6 +248,21 @@ public:
   void grow(size_t MinSize = 0) {
     this->grow_pod(MinSize*sizeof(T), sizeof(T));
   }
+public:
+  void push_back(const T &Elt) {
+    if (this->EndX < this->CapacityX) {
+    Retry:
+      *this->end() = Elt;
+      this->setEnd(this->end()+1);
+      return;
+    }
+    this->grow();
+    goto Retry;
+  }
+  
+  void pop_back() {
+    this->setEnd(this->end()-1);
+  }
 };
 
 
@@ -269,17 +272,19 @@ public:
 template <typename T>
 class SmallVectorImpl : public SmallVectorTemplateBase<T, isPodLike<T>::value> {
   typedef SmallVectorTemplateBase<T, isPodLike<T>::value > SuperClass;
-  
+
   SmallVectorImpl(const SmallVectorImpl&); // DISABLED.
 public:
   typedef typename SuperClass::iterator iterator;
   typedef typename SuperClass::size_type size_type;
 
+protected:
   // Default ctor - Initialize to empty.
   explicit SmallVectorImpl(unsigned N)
     : SmallVectorTemplateBase<T, isPodLike<T>::value>(N*sizeof(T)) {
   }
 
+public:
   ~SmallVectorImpl() {
     // Destroy the constructed elements in the vector.
     this->destroy_range(this->begin(), this->end());
@@ -302,7 +307,7 @@ public:
     } else if (N > this->size()) {
       if (this->capacity() < N)
         this->grow(N);
-      this->construct_range(this->end(), this->begin()+N, T());
+      std::uninitialized_fill(this->end(), this->begin()+N, T());
       this->setEnd(this->begin()+N);
     }
   }
@@ -314,7 +319,7 @@ public:
     } else if (N > this->size()) {
       if (this->capacity() < N)
         this->grow(N);
-      construct_range(this->end(), this->begin()+N, NV);
+      std::uninitialized_fill(this->end(), this->begin()+N, NV);
       this->setEnd(this->begin()+N);
     }
   }
@@ -324,28 +329,11 @@ public:
       this->grow(N);
   }
 
-  void push_back(const T &Elt) {
-    if (this->EndX < this->CapacityX) {
-    Retry:
-      new (this->end()) T(Elt);
-      this->setEnd(this->end()+1);
-      return;
-    }
-    this->grow();
-    goto Retry;
-  }
-
-  void pop_back() {
-    this->setEnd(this->end()-1);
-    this->end()->~T();
-  }
-
   T pop_back_val() {
     T Result = this->back();
-    pop_back();
+    this->pop_back();
     return Result;
   }
-
 
   void swap(SmallVectorImpl &RHS);
 
@@ -382,7 +370,7 @@ public:
     if (this->capacity() < NumElts)
       this->grow(NumElts);
     this->setEnd(this->begin()+NumElts);
-    construct_range(this->begin(), this->end(), Elt);
+    std::uninitialized_fill(this->begin(), this->end(), Elt);
   }
 
   iterator erase(iterator I) {
@@ -390,7 +378,7 @@ public:
     // Shift all elts down one.
     std::copy(I+1, this->end(), I);
     // Drop the last elt.
-    pop_back();
+    this->pop_back();
     return(N);
   }
 
@@ -406,7 +394,7 @@ public:
 
   iterator insert(iterator I, const T &Elt) {
     if (I == this->end()) {  // Important special case for empty vector.
-      push_back(Elt);
+      this->push_back(Elt);
       return this->end()-1;
     }
 
@@ -416,7 +404,14 @@ public:
       this->setEnd(this->end()+1);
       // Push everything else over.
       std::copy_backward(I, this->end()-1, this->end());
-      *I = Elt;
+
+      // If we just moved the element we're inserting, be sure to update
+      // the reference.
+      const T *EltPtr = &Elt;
+      if (I <= EltPtr && EltPtr < this->EndX)
+        ++EltPtr;
+
+      *I = *EltPtr;
       return I;
     }
     size_t EltNo = I-this->begin();
@@ -553,12 +548,6 @@ public:
     assert(N <= this->capacity());
     this->setEnd(this->begin() + N);
   }
-
-private:
-  static void construct_range(T *S, T *E, const T &Elt) {
-    for (; S != E; ++S)
-      new (S) T(Elt);
-  }
 };
 
 
@@ -685,9 +674,7 @@ public:
 
   explicit SmallVector(unsigned Size, const T &Value = T())
     : SmallVectorImpl<T>(NumTsAvailable) {
-    this->reserve(Size);
-    while (Size--)
-      this->push_back(Value);
+    this->assign(Size, Value);
   }
 
   template<typename ItTy>
@@ -706,6 +693,39 @@ public:
   }
 
 };
+
+/// Specialize SmallVector at N=0.  This specialization guarantees
+/// that it can be instantiated at an incomplete T if none of its
+/// members are required.
+template <typename T>
+class SmallVector<T,0> : public SmallVectorImpl<T> {
+public:
+  SmallVector() : SmallVectorImpl<T>(0) {}
+
+  explicit SmallVector(unsigned Size, const T &Value = T())
+    : SmallVectorImpl<T>(0) {
+    this->assign(Size, Value);
+  }
+
+  template<typename ItTy>
+  SmallVector(ItTy S, ItTy E) : SmallVectorImpl<T>(0) {
+    this->append(S, E);
+  }
+
+  SmallVector(const SmallVector &RHS) : SmallVectorImpl<T>(0) {
+    SmallVectorImpl<T>::operator=(RHS);
+  }
+
+  SmallVector &operator=(const SmallVectorImpl<T> &RHS) {
+    return SmallVectorImpl<T>::operator=(RHS);
+  }
+
+};
+
+template<typename T, unsigned N>
+static inline size_t capacity_in_bytes(const SmallVector<T, N> &X) {
+  return X.capacity_in_bytes();
+}
 
 } // End llvm namespace
 

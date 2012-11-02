@@ -18,9 +18,12 @@
 #include "llvm/MC/MCSection.h"
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/MC/MCMachOSymbolFlags.h"
+#include "llvm/MC/MCSectionMachO.h"
+#include "llvm/MC/MCDwarf.h"
+#include "llvm/MC/MCAsmBackend.h"
+#include "llvm/Support/Dwarf.h"
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
-#include "llvm/Target/TargetAsmBackend.h"
 
 using namespace llvm;
 
@@ -28,142 +31,103 @@ namespace {
 
 class MCMachOStreamer : public MCObjectStreamer {
 private:
-  MCFragment *getCurrentFragment() const {
-    assert(getCurrentSectionData() && "No current section!");
-
-    if (!getCurrentSectionData()->empty())
-      return &getCurrentSectionData()->getFragmentList().back();
-
-    return 0;
-  }
-
-  /// Get a data fragment to write into, creating a new one if the current
-  /// fragment is not a data fragment.
-  MCDataFragment *getOrCreateDataFragment() const {
-    MCDataFragment *F = dyn_cast_or_null<MCDataFragment>(getCurrentFragment());
-    if (!F)
-      F = new MCDataFragment(getCurrentSectionData());
-    return F;
-  }
-
-  void EmitInstToFragment(const MCInst &Inst);
-  void EmitInstToData(const MCInst &Inst);
+  virtual void EmitInstToData(const MCInst &Inst);
 
 public:
-  MCMachOStreamer(MCContext &Context, TargetAsmBackend &TAB,
+  MCMachOStreamer(MCContext &Context, MCAsmBackend &MAB,
                   raw_ostream &OS, MCCodeEmitter *Emitter)
-    : MCObjectStreamer(Context, TAB, OS, Emitter) {}
-
-  const MCExpr *AddValueSymbols(const MCExpr *Value) {
-    switch (Value->getKind()) {
-    case MCExpr::Target: assert(0 && "Can't handle target exprs yet!");
-    case MCExpr::Constant:
-      break;
-
-    case MCExpr::Binary: {
-      const MCBinaryExpr *BE = cast<MCBinaryExpr>(Value);
-      AddValueSymbols(BE->getLHS());
-      AddValueSymbols(BE->getRHS());
-      break;
-    }
-
-    case MCExpr::SymbolRef:
-      getAssembler().getOrCreateSymbolData(
-        cast<MCSymbolRefExpr>(Value)->getSymbol());
-      break;
-
-    case MCExpr::Unary:
-      AddValueSymbols(cast<MCUnaryExpr>(Value)->getSubExpr());
-      break;
-    }
-
-    return Value;
-  }
+    : MCObjectStreamer(Context, MAB, OS, Emitter) {}
 
   /// @name MCStreamer Interface
   /// @{
 
+  virtual void InitSections();
   virtual void EmitLabel(MCSymbol *Symbol);
+  virtual void EmitEHSymAttributes(const MCSymbol *Symbol,
+                                   MCSymbol *EHSymbol);
   virtual void EmitAssemblerFlag(MCAssemblerFlag Flag);
+  virtual void EmitThumbFunc(MCSymbol *Func);
   virtual void EmitAssignment(MCSymbol *Symbol, const MCExpr *Value);
   virtual void EmitSymbolAttribute(MCSymbol *Symbol, MCSymbolAttr Attribute);
   virtual void EmitSymbolDesc(MCSymbol *Symbol, unsigned DescValue);
   virtual void EmitCommonSymbol(MCSymbol *Symbol, uint64_t Size,
                                 unsigned ByteAlignment);
   virtual void BeginCOFFSymbolDef(const MCSymbol *Symbol) {
-    assert(0 && "macho doesn't support this directive");
+    llvm_unreachable("macho doesn't support this directive");
   }
   virtual void EmitCOFFSymbolStorageClass(int StorageClass) {
-    assert(0 && "macho doesn't support this directive");
+    llvm_unreachable("macho doesn't support this directive");
   }
   virtual void EmitCOFFSymbolType(int Type) {
-    assert(0 && "macho doesn't support this directive");
+    llvm_unreachable("macho doesn't support this directive");
   }
   virtual void EndCOFFSymbolDef() {
-    assert(0 && "macho doesn't support this directive");
+    llvm_unreachable("macho doesn't support this directive");
   }
   virtual void EmitELFSize(MCSymbol *Symbol, const MCExpr *Value) {
-    assert(0 && "macho doesn't support this directive");
+    llvm_unreachable("macho doesn't support this directive");
   }
-  virtual void EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size) {
-    assert(0 && "macho doesn't support this directive");
+  virtual void EmitLocalCommonSymbol(MCSymbol *Symbol, uint64_t Size,
+                                     unsigned ByteAlignment) {
+    llvm_unreachable("macho doesn't support this directive");
   }
   virtual void EmitZerofill(const MCSection *Section, MCSymbol *Symbol = 0,
                             unsigned Size = 0, unsigned ByteAlignment = 0);
   virtual void EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
                               uint64_t Size, unsigned ByteAlignment = 0);
   virtual void EmitBytes(StringRef Data, unsigned AddrSpace);
-  virtual void EmitValue(const MCExpr *Value, unsigned Size,unsigned AddrSpace);
-  virtual void EmitGPRel32Value(const MCExpr *Value) {
-    assert(0 && "macho doesn't support this directive");
-  }
   virtual void EmitValueToAlignment(unsigned ByteAlignment, int64_t Value = 0,
                                     unsigned ValueSize = 1,
                                     unsigned MaxBytesToEmit = 0);
   virtual void EmitCodeAlignment(unsigned ByteAlignment,
                                  unsigned MaxBytesToEmit = 0);
-  virtual void EmitValueToOffset(const MCExpr *Offset,
-                                 unsigned char Value = 0);
 
   virtual void EmitFileDirective(StringRef Filename) {
-    report_fatal_error("unsupported directive: '.file'");
-  }
-  virtual void EmitDwarfFileDirective(unsigned FileNo, StringRef Filename) {
-    report_fatal_error("unsupported directive: '.file'");
+    // FIXME: Just ignore the .file; it isn't important enough to fail the
+    // entire assembly.
+
+    //report_fatal_error("unsupported directive: '.file'");
   }
 
-  virtual void EmitInstruction(const MCInst &Inst);
-
-  virtual void Finish();
+  virtual void FinishImpl();
 
   /// @}
 };
 
 } // end anonymous namespace.
 
+void MCMachOStreamer::InitSections() {
+  SwitchSection(getContext().getMachOSection("__TEXT", "__text",
+                                    MCSectionMachO::S_ATTR_PURE_INSTRUCTIONS,
+                                    0, SectionKind::getText()));
+
+}
+
+void MCMachOStreamer::EmitEHSymAttributes(const MCSymbol *Symbol,
+                                          MCSymbol *EHSymbol) {
+  MCSymbolData &SD =
+    getAssembler().getOrCreateSymbolData(*Symbol);
+  if (SD.isExternal())
+    EmitSymbolAttribute(EHSymbol, MCSA_Global);
+  if (SD.getFlags() & SF_WeakDefinition)
+    EmitSymbolAttribute(EHSymbol, MCSA_WeakDefinition);
+  if (SD.isPrivateExtern())
+    EmitSymbolAttribute(EHSymbol, MCSA_PrivateExtern);
+}
+
 void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
   assert(Symbol->isUndefined() && "Cannot define a symbol twice!");
-  assert(!Symbol->isVariable() && "Cannot emit a variable symbol!");
-  assert(CurSection && "Cannot emit before setting section!");
 
-  Symbol->setSection(*CurSection);
-
-  MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
-
+  // isSymbolLinkerVisible uses the section.
+  Symbol->setSection(*getCurrentSection());
   // We have to create a new fragment if this is an atom defining symbol,
   // fragments cannot span atoms.
-  if (getAssembler().isSymbolLinkerVisible(SD.getSymbol()))
+  if (getAssembler().isSymbolLinkerVisible(*Symbol))
     new MCDataFragment(getCurrentSectionData());
 
-  // FIXME: This is wasteful, we don't necessarily need to create a data
-  // fragment. Instead, we should mark the symbol as pointing into the data
-  // fragment if it exists, otherwise we should just queue the label and set its
-  // fragment pointer when we emit the next fragment.
-  MCDataFragment *F = getOrCreateDataFragment();
-  assert(!SD.getFragment() && "Unexpected fragment on symbol data!");
-  SD.setFragment(F);
-  SD.setOffset(F->getContents().size());
+  MCObjectStreamer::EmitLabel(Symbol);
 
+  MCSymbolData &SD = getAssembler().getSymbolData(*Symbol);
   // This causes the reference type flag to be cleared. Darwin 'as' was "trying"
   // to clear the weak reference and weak definition bits too, but the
   // implementation was buggy. For now we just try to match 'as', for
@@ -175,16 +139,33 @@ void MCMachOStreamer::EmitLabel(MCSymbol *Symbol) {
 }
 
 void MCMachOStreamer::EmitAssemblerFlag(MCAssemblerFlag Flag) {
+  // Let the target do whatever target specific stuff it needs to do.
+  getAssembler().getBackend().handleAssemblerFlag(Flag);
+  // Do any generic stuff we need to do.
   switch (Flag) {
+  case MCAF_SyntaxUnified: return; // no-op here.
+  case MCAF_Code16: return; // Change parsing mode; no-op here.
+  case MCAF_Code32: return; // Change parsing mode; no-op here.
+  case MCAF_Code64: return; // Change parsing mode; no-op here.
   case MCAF_SubsectionsViaSymbols:
     getAssembler().setSubsectionsViaSymbols(true);
     return;
   }
+}
 
-  assert(0 && "invalid assembler flag!");
+void MCMachOStreamer::EmitThumbFunc(MCSymbol *Symbol) {
+  // Remember that the function is a thumb function. Fixup and relocation
+  // values will need adjusted.
+  getAssembler().setIsThumbFunc(Symbol);
+
+  // Mark the thumb bit on the symbol.
+  MCSymbolData &SD = getAssembler().getOrCreateSymbolData(*Symbol);
+  SD.setFlags(SD.getFlags() | SF_ThumbFunc);
 }
 
 void MCMachOStreamer::EmitAssignment(MCSymbol *Symbol, const MCExpr *Value) {
+  // TODO: This is exactly the same as WinCOFFStreamer. Consider merging into
+  // MCObjectStreamer.
   // FIXME: Lift context changes into super class.
   getAssembler().getOrCreateSymbolData(*Symbol);
   Symbol->setVariableValue(AddValueSymbols(Value));
@@ -223,14 +204,14 @@ void MCMachOStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
   case MCSA_ELF_TypeTLS:
   case MCSA_ELF_TypeCommon:
   case MCSA_ELF_TypeNoType:
-  case MCSA_IndirectSymbol:
+  case MCSA_ELF_TypeGnuUniqueObject:
   case MCSA_Hidden:
+  case MCSA_IndirectSymbol:
   case MCSA_Internal:
   case MCSA_Protected:
   case MCSA_Weak:
   case MCSA_Local:
-    assert(0 && "Invalid symbol attribute for Mach-O!");
-    break;
+    llvm_unreachable("Invalid symbol attribute for Mach-O!");
 
   case MCSA_Global:
     SD.setExternal(true);
@@ -257,6 +238,10 @@ void MCMachOStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
     SD.setFlags(SD.getFlags() | SF_NoDeadStrip);
     break;
 
+  case MCSA_SymbolResolver:
+    SD.setFlags(SD.getFlags() | SF_SymbolResolver);
+    break;
+
   case MCSA_PrivateExtern:
     SD.setExternal(true);
     SD.setPrivateExtern(true);
@@ -272,6 +257,10 @@ void MCMachOStreamer::EmitSymbolAttribute(MCSymbol *Symbol,
     // FIXME: 'as' enforces that this is defined and global. The manual claims
     // it has to be in a coalesced section, but this isn't enforced.
     SD.setFlags(SD.getFlags() | SF_WeakDefinition);
+    break;
+
+  case MCSA_WeakDefAutoPrivate:
+    SD.setFlags(SD.getFlags() | SF_WeakDefinition | SF_WeakReference);
     break;
   }
 }
@@ -331,30 +320,16 @@ void MCMachOStreamer::EmitTBSSSymbol(const MCSection *Section, MCSymbol *Symbol,
 }
 
 void MCMachOStreamer::EmitBytes(StringRef Data, unsigned AddrSpace) {
+  // TODO: This is exactly the same as WinCOFFStreamer. Consider merging into
+  // MCObjectStreamer.
   getOrCreateDataFragment()->getContents().append(Data.begin(), Data.end());
-}
-
-void MCMachOStreamer::EmitValue(const MCExpr *Value, unsigned Size,
-                                unsigned AddrSpace) {
-  MCDataFragment *DF = getOrCreateDataFragment();
-
-  // Avoid fixups when possible.
-  int64_t AbsValue;
-  if (AddValueSymbols(Value)->EvaluateAsAbsolute(AbsValue)) {
-    // FIXME: Endianness assumption.
-    for (unsigned i = 0; i != Size; ++i)
-      DF->getContents().push_back(uint8_t(AbsValue >> (i * 8)));
-  } else {
-    DF->addFixup(MCFixup::Create(DF->getContents().size(),
-                                 AddValueSymbols(Value),
-                                 MCFixup::getKindForSize(Size)));
-    DF->getContents().resize(DF->getContents().size() + Size, 0);
-  }
 }
 
 void MCMachOStreamer::EmitValueToAlignment(unsigned ByteAlignment,
                                            int64_t Value, unsigned ValueSize,
                                            unsigned MaxBytesToEmit) {
+  // TODO: This is exactly the same as WinCOFFStreamer. Consider merging into
+  // MCObjectStreamer.
   if (MaxBytesToEmit == 0)
     MaxBytesToEmit = ByteAlignment;
   new MCAlignFragment(ByteAlignment, Value, ValueSize, MaxBytesToEmit,
@@ -367,6 +342,8 @@ void MCMachOStreamer::EmitValueToAlignment(unsigned ByteAlignment,
 
 void MCMachOStreamer::EmitCodeAlignment(unsigned ByteAlignment,
                                         unsigned MaxBytesToEmit) {
+  // TODO: This is exactly the same as WinCOFFStreamer. Consider merging into
+  // MCObjectStreamer.
   if (MaxBytesToEmit == 0)
     MaxBytesToEmit = ByteAlignment;
   MCAlignFragment *F = new MCAlignFragment(ByteAlignment, 0, 1, MaxBytesToEmit,
@@ -376,28 +353,6 @@ void MCMachOStreamer::EmitCodeAlignment(unsigned ByteAlignment,
   // Update the maximum alignment on the current section if necessary.
   if (ByteAlignment > getCurrentSectionData()->getAlignment())
     getCurrentSectionData()->setAlignment(ByteAlignment);
-}
-
-void MCMachOStreamer::EmitValueToOffset(const MCExpr *Offset,
-                                        unsigned char Value) {
-  new MCOrgFragment(*Offset, Value, getCurrentSectionData());
-}
-
-void MCMachOStreamer::EmitInstToFragment(const MCInst &Inst) {
-  MCInstFragment *IF = new MCInstFragment(Inst, getCurrentSectionData());
-
-  // Add the fixups and data.
-  //
-  // FIXME: Revisit this design decision when relaxation is done, we may be
-  // able to get away with not storing any extra data in the MCInst.
-  SmallVector<MCFixup, 4> Fixups;
-  SmallString<256> Code;
-  raw_svector_ostream VecOS(Code);
-  getAssembler().getEmitter().EncodeInstruction(Inst, VecOS, Fixups);
-  VecOS.flush();
-
-  IF->getCode() = Code;
-  IF->getFixups() = Fixups;
 }
 
 void MCMachOStreamer::EmitInstToData(const MCInst &Inst) {
@@ -417,36 +372,9 @@ void MCMachOStreamer::EmitInstToData(const MCInst &Inst) {
   DF->getContents().append(Code.begin(), Code.end());
 }
 
-void MCMachOStreamer::EmitInstruction(const MCInst &Inst) {
-  // Scan for values.
-  for (unsigned i = Inst.getNumOperands(); i--; )
-    if (Inst.getOperand(i).isExpr())
-      AddValueSymbols(Inst.getOperand(i).getExpr());
+void MCMachOStreamer::FinishImpl() {
+  EmitFrames(true);
 
-  getCurrentSectionData()->setHasInstructions(true);
-
-  // If this instruction doesn't need relaxation, just emit it as data.
-  if (!getAssembler().getBackend().MayNeedRelaxation(Inst)) {
-    EmitInstToData(Inst);
-    return;
-  }
-
-  // Otherwise, if we are relaxing everything, relax the instruction as much as
-  // possible and emit it as data.
-  if (getAssembler().getRelaxAll()) {
-    MCInst Relaxed;
-    getAssembler().getBackend().RelaxInstruction(Inst, Relaxed);
-    while (getAssembler().getBackend().MayNeedRelaxation(Relaxed))
-      getAssembler().getBackend().RelaxInstruction(Relaxed, Relaxed);
-    EmitInstToData(Relaxed);
-    return;
-  }
-
-  // Otherwise emit to a separate fragment.
-  EmitInstToFragment(Inst);
-}
-
-void MCMachOStreamer::Finish() {
   // We have to set the fragment atom associations so we can relax properly for
   // Mach-O.
 
@@ -476,13 +404,13 @@ void MCMachOStreamer::Finish() {
     }
   }
 
-  this->MCObjectStreamer::Finish();
+  this->MCObjectStreamer::FinishImpl();
 }
 
-MCStreamer *llvm::createMachOStreamer(MCContext &Context, TargetAsmBackend &TAB,
+MCStreamer *llvm::createMachOStreamer(MCContext &Context, MCAsmBackend &MAB,
                                       raw_ostream &OS, MCCodeEmitter *CE,
                                       bool RelaxAll) {
-  MCMachOStreamer *S = new MCMachOStreamer(Context, TAB, OS, CE);
+  MCMachOStreamer *S = new MCMachOStreamer(Context, MAB, OS, CE);
   if (RelaxAll)
     S->getAssembler().setRelaxAll(true);
   return S;

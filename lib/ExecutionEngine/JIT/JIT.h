@@ -42,7 +42,7 @@ public:
   FunctionPassManager &getPM(const MutexGuard &L) {
     return PM;
   }
-  
+
   Module *getModule() const { return M; }
   std::vector<AssertingVH<Function> > &getPendingFunctions(const MutexGuard &L){
     return PendingFunctions;
@@ -51,9 +51,14 @@ public:
 
 
 class JIT : public ExecutionEngine {
+  /// types
+  typedef ValueMap<const BasicBlock *, void *>
+      BasicBlockAddressMapTy;
+  /// data
   TargetMachine &TM;       // The current target we are compiling to
   TargetJITInfo &TJI;      // The JITInfo for the target we are compiling to
   JITCodeEmitter *JCE;     // JCE object
+  JITMemoryManager *JMM;
   std::vector<JITEventListener*> EventListeners;
 
   /// AllocateGVsWithCode - Some applications require that global variables and
@@ -67,16 +72,21 @@ class JIT : public ExecutionEngine {
 
   JITState *jitstate;
 
+  /// BasicBlockAddressMap - A mapping between LLVM basic blocks and their
+  /// actualized version, only filled for basic blocks that have their address
+  /// taken.
+  BasicBlockAddressMapTy BasicBlockAddressMap;
+
+
   JIT(Module *M, TargetMachine &tm, TargetJITInfo &tji,
-      JITMemoryManager *JMM, CodeGenOpt::Level OptLevel,
-      bool AllocateGVsWithCode);
+      JITMemoryManager *JMM, bool AllocateGVsWithCode);
 public:
   ~JIT();
 
   static void Register() {
     JITCtor = createJIT;
   }
-  
+
   /// getJITInfo - Return the target JIT information structure.
   ///
   TargetJITInfo &getJITInfo() const { return TJI; }
@@ -90,13 +100,14 @@ public:
                                  CodeGenOpt::Level OptLevel =
                                    CodeGenOpt::Default,
                                  bool GVsWithCode = true,
-				 CodeModel::Model CMM = CodeModel::Default) {
+                                 Reloc::Model RM = Reloc::Default,
+                                 CodeModel::Model CMM = CodeModel::JITDefault) {
     return ExecutionEngine::createJIT(M, Err, JMM, OptLevel, GVsWithCode,
-				      CMM);
+                                      RM, CMM);
   }
 
   virtual void addModule(Module *M);
-  
+
   /// removeModule - Remove a Module from the list of modules.  Returns true if
   /// M is found.
   virtual bool removeModule(Module *M);
@@ -107,15 +118,15 @@ public:
                                    const std::vector<GenericValue> &ArgValues);
 
   /// getPointerToNamedFunction - This method returns the address of the
-  /// specified function by using the dlsym function call.  As such it is only
+  /// specified function by using the MemoryManager. As such it is only
   /// useful for resolving library symbols, not code generated symbols.
   ///
   /// If AbortOnFailure is false and no function with the given name is
   /// found, this function silently returns a null pointer. Otherwise,
   /// it prints a message to stderr and aborts.
   ///
-  void *getPointerToNamedFunction(const std::string &Name,
-                                  bool AbortOnFailure = true);
+  virtual void *getPointerToNamedFunction(const std::string &Name,
+                                          bool AbortOnFailure = true);
 
   // CompilationCallback - Invoked the first time that a call site is found,
   // which causes lazy compilation of the target function.
@@ -127,11 +138,16 @@ public:
   ///
   void *getPointerToFunction(Function *F);
 
-  void *getPointerToBasicBlock(BasicBlock *BB) {
-    assert(0 && "JIT does not support address-of-label yet!");
-    return 0;
-  }
-  
+  /// addPointerToBasicBlock - Adds address of the specific basic block.
+  void addPointerToBasicBlock(const BasicBlock *BB, void *Addr);
+
+  /// clearPointerToBasicBlock - Removes address of specific basic block.
+  void clearPointerToBasicBlock(const BasicBlock *BB);
+
+  /// getPointerToBasicBlock - This returns the address of the specified basic
+  /// block, assuming function is compiled.
+  void *getPointerToBasicBlock(BasicBlock *BB);
+
   /// getOrEmitGlobalVariable - Return the address of the specified global
   /// variable, possibly emitting it to memory if needed.  This is used by the
   /// Emitter.
@@ -157,7 +173,7 @@ public:
   void freeMachineCodeForFunction(Function *F);
 
   /// addPendingFunction - while jitting non-lazily, a called but non-codegen'd
-  /// function was encountered.  Add it to a pending list to be processed after 
+  /// function was encountered.  Add it to a pending list to be processed after
   /// the current function.
   ///
   void addPendingFunction(Function *F);
@@ -166,23 +182,11 @@ public:
   ///
   JITCodeEmitter *getCodeEmitter() const { return JCE; }
 
-  /// selectTarget - Pick a target either via -march or by guessing the native
-  /// arch.  Add any CPU features specified via -mcpu or -mattr.
-  static TargetMachine *selectTarget(Module *M,
-                                     StringRef MArch,
-                                     StringRef MCPU,
-                                     const SmallVectorImpl<std::string>& MAttrs,
-                                     std::string *Err);
-
   static ExecutionEngine *createJIT(Module *M,
                                     std::string *ErrorStr,
                                     JITMemoryManager *JMM,
-                                    CodeGenOpt::Level OptLevel,
                                     bool GVsWithCode,
-                                    CodeModel::Model CMM,
-                                    StringRef MArch,
-                                    StringRef MCPU,
-                                    const SmallVectorImpl<std::string>& MAttrs);
+                                    TargetMachine *TM);
 
   // Run the JIT on F and return information about the generated code
   void runJITOnFunction(Function *F, MachineCodeInfo *MCI = 0);
@@ -197,11 +201,18 @@ public:
       const JITEvent_EmittedFunctionDetails &Details);
   void NotifyFreeingMachineCode(void *OldPtr);
 
+  BasicBlockAddressMapTy &
+  getBasicBlockAddressMap(const MutexGuard &) {
+    return BasicBlockAddressMap;
+  }
+
+
 private:
   static JITCodeEmitter *createEmitter(JIT &J, JITMemoryManager *JMM,
                                        TargetMachine &tm);
   void runJITOnFunctionUnlocked(Function *F, const MutexGuard &locked);
   void updateFunctionStub(Function *F);
+  void jitTheFunction(Function *F, const MutexGuard &locked);
 
 protected:
 

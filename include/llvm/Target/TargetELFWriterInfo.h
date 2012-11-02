@@ -15,9 +15,6 @@
 #define LLVM_TARGET_TARGETELFWRITERINFO_H
 
 namespace llvm {
-  class Function;
-  class TargetData;
-  class TargetMachine;
 
   //===--------------------------------------------------------------------===//
   //                          TargetELFWriterInfo
@@ -28,7 +25,6 @@ namespace llvm {
     // EMachine - This field is the target specific value to emit as the
     // e_machine member of the ELF header.
     unsigned short EMachine;
-    TargetMachine &TM;
     bool is64Bit, isLittleEndian;
   public:
 
@@ -62,7 +58,7 @@ namespace llvm {
       ELFDATA2MSB = 2  // Big-endian object file
     };
 
-    explicit TargetELFWriterInfo(TargetMachine &tm);
+    explicit TargetELFWriterInfo(bool is64Bit_, bool isLittleEndian_);
     virtual ~TargetELFWriterInfo();
 
     unsigned short getEMachine() const { return EMachine; }

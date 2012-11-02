@@ -1,8 +1,8 @@
 ; Linux doesn't support stack realignment for functions with allocas (PR2888).
 ; Until it does, we shouldn't use movaps to access the stack.  On targets with
 ; sufficiently aligned stack (e.g. darwin) we should.
-
-; RUN: llc < %s -mtriple=i386-pc-linux-gnu -mcpu=yonah | not grep movaps
+; PR8969 - make 32-bit linux have a 16-byte aligned stack
+; RUN: llc < %s -mtriple=i386-pc-linux-gnu -mcpu=yonah | grep movaps | count 2
 ; RUN: llc < %s -mtriple=i686-apple-darwin9 -mcpu=yonah | grep movaps | count 2
 
 
@@ -11,12 +11,12 @@ target triple = "i386-pc-linux-gnu"
   
 define void @foo(i32 %t) nounwind {
   %tmp1210 = alloca i8, i32 32, align 4
-  call void @llvm.memset.i64(i8* %tmp1210, i8 0, i64 32, i32 4)
-  
+  call void @llvm.memset.p0i8.i64(i8* %tmp1210, i8 0, i64 32, i32 4, i1 false)
   %x = alloca i8, i32 %t
   call void @dummy(i8* %x)
   ret void
 }
 
-declare void @dummy(i8* %x)
-declare void @llvm.memset.i64(i8*, i8, i64, i32) nounwind
+declare void @dummy(i8*)
+
+declare void @llvm.memset.p0i8.i64(i8* nocapture, i8, i64, i32, i1) nounwind

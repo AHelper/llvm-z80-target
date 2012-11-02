@@ -125,7 +125,7 @@ Exit:           ; preds = %Loop
 
 define i32* @test8({ i32, i32 } *%A, i1 %b) {
 BB0:
-        %X = getelementptr { i32, i32 } *%A, i32 0, i32 1
+        %X = getelementptr inbounds { i32, i32 } *%A, i32 0, i32 1
         br i1 %b, label %BB1, label %BB2
 
 BB1:
@@ -139,7 +139,7 @@ BB2:
 ; CHECK: @test8
 ; CHECK-NOT: phi
 ; CHECK: BB2:
-; CHECK-NEXT: %B = getelementptr 
+; CHECK-NEXT: %B = getelementptr { i32, i32 }* %A 
 ; CHECK-NEXT: ret i32* %B
 }
 
@@ -197,25 +197,25 @@ declare i1 @test11a()
 define i1 @test11() {
 entry:
   %a = alloca i32
-  %i = ptrtoint i32* %a to i32
+  %i = ptrtoint i32* %a to i64
   %b = call i1 @test11a()
   br i1 %b, label %one, label %two
 
 one:
-  %x = phi i32 [%i, %entry], [%y, %two]
+  %x = phi i64 [%i, %entry], [%y, %two]
   %c = call i1 @test11a()
   br i1 %c, label %two, label %end
 
 two:
-  %y = phi i32 [%i, %entry], [%x, %one]
+  %y = phi i64 [%i, %entry], [%x, %one]
   %d = call i1 @test11a()
   br i1 %d, label %one, label %end
 
 end:
-  %f = phi i32 [ %x, %one], [%y, %two]
+  %f = phi i64 [ %x, %one], [%y, %two]
   ; Change the %f to %i, and the optimizer suddenly becomes a lot smarter
   ; even though %f must equal %i at this point
-  %g = inttoptr i32 %f to i32*
+  %g = inttoptr i64 %f to i32*
   store i32 10, i32* %g
   %z = call i1 @test11a()
   ret i1 %z
@@ -401,4 +401,222 @@ if.else:                                          ; preds = %entry
   %tmp5 = load i32* %arrayidx4                    ; <i32> [#uses=1]
   store i32 %tmp5, i32* %res
   br label %if.end
+}
+
+; PR4413
+declare i32 @ext()
+; CHECK: @test17
+define i32 @test17(i1 %a) {
+entry:
+    br i1 %a, label %bb1, label %bb2
+
+bb1:        ; preds = %entry
+    %0 = tail call i32 @ext()        ; <i32> [#uses=1]
+    br label %bb2
+
+bb2:        ; preds = %bb1, %entry
+    %cond = phi i1 [ true, %bb1 ], [ false, %entry ]        ; <i1> [#uses=1]
+; CHECK-NOT: %val = phi i32 [ %0, %bb1 ], [ 0, %entry ]
+    %val = phi i32 [ %0, %bb1 ], [ 0, %entry ]        ; <i32> [#uses=1]
+    %res = select i1 %cond, i32 %val, i32 0        ; <i32> [#uses=1]
+; CHECK: ret i32 %cond
+    ret i32 %res
+}
+
+define i1 @test18(i1 %cond) {
+  %zero = alloca i32
+  %one = alloca i32
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %ptr = phi i32* [ %zero, %true ] , [ %one, %false ]
+  %isnull = icmp eq i32* %ptr, null
+  ret i1 %isnull
+; CHECK: @test18
+; CHECK: ret i1 false
+}
+
+define i1 @test19(i1 %cond, double %x) {
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %p = phi double [ %x, %true ], [ 0x7FF0000000000000, %false ]; RHS = +infty
+  %cmp = fcmp ule double %x, %p
+  ret i1 %cmp
+; CHECK: @test19
+; CHECK: ret i1 true
+}
+
+define i1 @test20(i1 %cond) {
+  %a = alloca i32
+  %b = alloca i32
+  %c = alloca i32
+  br i1 %cond, label %true, label %false
+true:
+  br label %ret
+false:
+  br label %ret
+ret:
+  %p = phi i32* [ %a, %true ], [ %b, %false ]
+  %r = icmp eq i32* %p, %c
+  ret i1 %r
+; CHECK: @test20
+; CHECK: ret i1 false
+}
+
+define i1 @test21(i1 %c1, i1 %c2) {
+  %a = alloca i32
+  %b = alloca i32
+  %c = alloca i32
+  br i1 %c1, label %true, label %false
+true:
+  br label %loop
+false:
+  br label %loop
+loop:
+  %p = phi i32* [ %a, %true ], [ %b, %false ], [ %p, %loop ]
+  %r = icmp eq i32* %p, %c
+  br i1 %c2, label %ret, label %loop
+ret:
+  ret i1 %r
+; CHECK: @test21
+; CHECK: ret i1 false
+}
+
+define void @test22() {
+; CHECK: @test22
+entry:
+  br label %loop
+loop:
+  %phi = phi i32 [ 0, %entry ], [ %y, %loop ]
+  %y = add i32 %phi, 1
+  %o = or i32 %y, %phi
+  %e = icmp eq i32 %o, %y
+  br i1 %e, label %loop, label %ret
+; CHECK: br i1 %e
+ret:
+  ret void
+}
+
+define i32 @test23(i32 %A, i1 %b, i32 * %P) {
+BB0:
+        br label %Loop
+
+Loop:           ; preds = %Loop, %BB0
+        ; PHI has same value always.
+        %B = phi i32 [ %A, %BB0 ], [ 42, %Loop ]
+        %D = add i32 %B, 19
+        store i32 %D, i32* %P
+        br i1 %b, label %Loop, label %Exit
+
+Exit:           ; preds = %Loop
+        %E = add i32 %B, 19
+        ret i32 %E
+; CHECK: @test23
+; CHECK: %phitmp = add i32 %A, 19
+; CHECK: Loop:
+; CHECK-NEXT: %B = phi i32 [ %phitmp, %BB0 ], [ 61, %Loop ]
+; CHECK: Exit:
+; CHECK-NEXT: ret i32 %B
+}
+
+define i32 @test24(i32 %A, i1 %cond) {
+BB0:
+        %X = add nuw nsw i32 %A, 1
+        br i1 %cond, label %BB1, label %BB2
+
+BB1:
+        %Y = add nuw i32 %A, 1
+        br label %BB2
+
+BB2:
+        %C = phi i32 [ %X, %BB0 ], [ %Y, %BB1 ]
+        ret i32 %C
+; CHECK: @test24
+; CHECK-NOT: phi
+; CHECK: BB2:
+; CHECK-NEXT: %C = add nuw i32 %A, 1
+; CHECK-NEXT: ret i32 %C
+}
+
+; Same as test11, but used to be missed due to a bug.
+declare i1 @test25a()
+
+define i1 @test25() {
+entry:
+  %a = alloca i32
+  %i = ptrtoint i32* %a to i64
+  %b = call i1 @test25a()
+  br i1 %b, label %one, label %two
+
+one:
+  %x = phi i64 [%y, %two], [%i, %entry]
+  %c = call i1 @test25a()
+  br i1 %c, label %two, label %end
+
+two:
+  %y = phi i64 [%x, %one], [%i, %entry]
+  %d = call i1 @test25a()
+  br i1 %d, label %one, label %end
+
+end:
+  %f = phi i64 [ %x, %one], [%y, %two]
+  ; Change the %f to %i, and the optimizer suddenly becomes a lot smarter
+  ; even though %f must equal %i at this point
+  %g = inttoptr i64 %f to i32*
+  store i32 10, i32* %g
+  %z = call i1 @test25a()
+  ret i1 %z
+; CHECK: @test25
+; CHECK-NOT: phi i32
+; CHECK: ret i1 %z
+}
+
+declare i1 @test26a()
+
+define i1 @test26(i32 %n) {
+entry:
+  %a = alloca i32
+  %i = ptrtoint i32* %a to i64
+  %b = call i1 @test26a()
+  br label %one
+
+one:
+  %x = phi i64 [%y, %two], [%w, %three], [%i, %entry]
+  %c = call i1 @test26a()
+  switch i32 %n, label %end [
+          i32 2, label %two
+          i32 3, label %three
+  ]
+
+two:
+  %y = phi i64 [%x, %one], [%w, %three]
+  %d = call i1 @test26a()
+  switch i32 %n, label %end [
+          i32 10, label %one
+          i32 30, label %three
+  ]
+
+three:
+  %w = phi i64 [%y, %two], [%x, %one]
+  %e = call i1 @test26a()
+  br i1 %e, label %one, label %two
+
+end:
+  %f = phi i64 [ %x, %one], [%y, %two]
+  ; Change the %f to %i, and the optimizer suddenly becomes a lot smarter
+  ; even though %f must equal %i at this point
+  %g = inttoptr i64 %f to i32*
+  store i32 10, i32* %g
+  %z = call i1 @test26a()
+  ret i1 %z
+; CHECK: @test26
+; CHECK-NOT: phi i32
+; CHECK: ret i1 %z
 }

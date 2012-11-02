@@ -1,4 +1,4 @@
-//===- MSP430InstrInfo.h - MSP430 Instruction Information -------*- C++ -*-===//
+//===-- MSP430InstrInfo.h - MSP430 Instruction Information ------*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -14,8 +14,11 @@
 #ifndef LLVM_TARGET_MSP430INSTRINFO_H
 #define LLVM_TARGET_MSP430INSTRINFO_H
 
-#include "llvm/Target/TargetInstrInfo.h"
 #include "MSP430RegisterInfo.h"
+#include "llvm/Target/TargetInstrInfo.h"
+
+#define GET_INSTRINFO_HEADER
+#include "MSP430GenInstrInfo.inc"
 
 namespace llvm {
 
@@ -37,7 +40,7 @@ namespace MSP430II {
   };
 }
 
-class MSP430InstrInfo : public TargetInstrInfoImpl {
+class MSP430InstrInfo : public MSP430GenInstrInfo {
   const MSP430RegisterInfo RI;
   MSP430TargetMachine &TM;
 public:
@@ -49,15 +52,10 @@ public:
   ///
   virtual const TargetRegisterInfo &getRegisterInfo() const { return RI; }
 
-  bool copyRegToReg(MachineBasicBlock &MBB, MachineBasicBlock::iterator I,
-                    unsigned DestReg, unsigned SrcReg,
-                    const TargetRegisterClass *DestRC,
-                    const TargetRegisterClass *SrcRC,
-                    DebugLoc DL) const;
-
-  bool isMoveInstr(const MachineInstr& MI,
-                   unsigned &SrcReg, unsigned &DstReg,
-                   unsigned &SrcSubIdx, unsigned &DstSubIdx) const;
+  void copyPhysReg(MachineBasicBlock &MBB,
+                   MachineBasicBlock::iterator I, DebugLoc DL,
+                   unsigned DestReg, unsigned SrcReg,
+                   bool KillSrc) const;
 
   virtual void storeRegToStackSlot(MachineBasicBlock &MBB,
                                    MachineBasicBlock::iterator MI,
@@ -70,15 +68,6 @@ public:
                                     unsigned DestReg, int FrameIdx,
                                     const TargetRegisterClass *RC,
                                     const TargetRegisterInfo *TRI) const;
-
-  virtual bool spillCalleeSavedRegisters(MachineBasicBlock &MBB,
-                                         MachineBasicBlock::iterator MI,
-                                        const std::vector<CalleeSavedInfo> &CSI,
-                                         const TargetRegisterInfo *TRI) const;
-  virtual bool restoreCalleeSavedRegisters(MachineBasicBlock &MBB,
-                                           MachineBasicBlock::iterator MI,
-                                        const std::vector<CalleeSavedInfo> &CSI,
-                                           const TargetRegisterInfo *TRI) const;
 
   unsigned GetInstSizeInBytes(const MachineInstr *MI) const;
 

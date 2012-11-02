@@ -18,6 +18,7 @@
 #include "llvm/Analysis/Dominators.h"
 #include "llvm/Analysis/LoopInfo.h"
 #include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Assembly/Writer.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/Support/CFG.h"
@@ -35,7 +36,9 @@ namespace {
 
   public:
     static char ID; // Pass identification
-    Sinking() : FunctionPass(&ID) {}
+    Sinking() : FunctionPass(ID) {
+      initializeSinkingPass(*PassRegistry::getPassRegistry());
+    }
     
     virtual bool runOnFunction(Function &F);
     
@@ -56,8 +59,11 @@ namespace {
 } // end anonymous namespace
   
 char Sinking::ID = 0;
-static RegisterPass<Sinking>
-X("sink", "Code sinking");
+INITIALIZE_PASS_BEGIN(Sinking, "sink", "Code sinking", false, false)
+INITIALIZE_PASS_DEPENDENCY(LoopInfo)
+INITIALIZE_PASS_DEPENDENCY(DominatorTree)
+INITIALIZE_AG_DEPENDENCY(AliasAnalysis)
+INITIALIZE_PASS_END(Sinking, "sink", "Code sinking", false, false)
 
 FunctionPass *llvm::createSinkingPass() { return new Sinking(); }
 
@@ -148,23 +154,24 @@ bool Sinking::ProcessBlock(BasicBlock &BB) {
 
 static bool isSafeToMove(Instruction *Inst, AliasAnalysis *AA,
                          SmallPtrSet<Instruction *, 8> &Stores) {
-  if (LoadInst *L = dyn_cast<LoadInst>(Inst)) {
-    if (L->isVolatile()) return false;
-
-    Value *Ptr = L->getPointerOperand();
-    unsigned Size = AA->getTypeStoreSize(L->getType());
-    for (SmallPtrSet<Instruction *, 8>::iterator I = Stores.begin(),
-         E = Stores.end(); I != E; ++I)
-      if (AA->getModRefInfo(*I, Ptr, Size) & AliasAnalysis::Mod)
-        return false;
-  }
 
   if (Inst->mayWriteToMemory()) {
     Stores.insert(Inst);
     return false;
   }
 
-  return Inst->isSafeToSpeculativelyExecute();
+  if (LoadInst *L = dyn_cast<LoadInst>(Inst)) {
+    AliasAnalysis::Location Loc = AA->getLocation(L);
+    for (SmallPtrSet<Instruction *, 8>::iterator I = Stores.begin(),
+         E = Stores.end(); I != E; ++I)
+      if (AA->getModRefInfo(*I, Loc) & AliasAnalysis::Mod)
+        return false;
+  }
+
+  if (isa<TerminatorInst>(Inst) || isa<PHINode>(Inst))
+    return false;
+
+  return true;
 }
 
 /// SinkInstruction - Determine whether it is safe to sink the specified machine
@@ -234,7 +241,7 @@ bool Sinking::SinkInstruction(Instruction *Inst,
   if (SuccToSinkTo->getUniquePredecessor() != ParentBlock) {
     // We cannot sink a load across a critical edge - there may be stores in
     // other code paths.
-    if (!Inst->isSafeToSpeculativelyExecute()) {
+    if (!isSafeToSpeculativelyExecute(Inst)) {
       DEBUG(dbgs() << " *** PUNTING: Wont sink load along critical edge.\n");
       return false;
     }

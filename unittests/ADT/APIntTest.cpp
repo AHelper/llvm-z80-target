@@ -20,8 +20,8 @@ namespace {
 TEST(APIntTest, ShiftLeftByZero) {
   APInt One = APInt::getNullValue(65) + 1;
   APInt Shl = One.shl(0);
-  EXPECT_EQ(true, Shl[0]);
-  EXPECT_EQ(false, Shl[1]);
+  EXPECT_TRUE(Shl[0]);
+  EXPECT_FALSE(Shl[1]);
 }
 
 TEST(APIntTest, i128_NegativeCount) {
@@ -39,6 +39,9 @@ TEST(APIntTest, i128_NegativeCount) {
   EXPECT_EQ(-1, Minus1.getSExtValue());
 }
 
+// XFAIL this test on FreeBSD where the system gcc-4.2.1 seems to miscompile it.
+#if defined(__llvm__) || !defined(__FreeBSD__)
+
 TEST(APIntTest, i33_Count) {
   APInt i33minus2(33, static_cast<uint64_t>(-2), true);
   EXPECT_EQ(0u, i33minus2.countLeadingZeros());
@@ -50,9 +53,11 @@ TEST(APIntTest, i33_Count) {
   EXPECT_EQ(((uint64_t)-2)&((1ull<<33) -1), i33minus2.getZExtValue());
 }
 
+#endif
+
 TEST(APIntTest, i65_Count) {
   APInt i65minus(65, 0, true);
-  i65minus.set(64);
+  i65minus.setBit(64);
   EXPECT_EQ(0u, i65minus.countLeadingZeros());
   EXPECT_EQ(1u, i65minus.countLeadingOnes());
   EXPECT_EQ(65u, i65minus.getActiveBits());
@@ -138,6 +143,12 @@ TEST(APIntTest, i1) {
   EXPECT_EQ(one, one.shl(0));
   EXPECT_EQ(zero, one.lshr(1));
   EXPECT_EQ(zero, one.ashr(1));
+
+  // Rotates.
+  EXPECT_EQ(one, one.rotl(0));
+  EXPECT_EQ(one, one.rotl(1));
+  EXPECT_EQ(one, one.rotr(0));
+  EXPECT_EQ(one, one.rotr(1));
 
   // Multiplies.
   EXPECT_EQ(neg_one, neg_one * one);
@@ -232,6 +243,24 @@ TEST(APIntTest, fromString) {
   EXPECT_EQ(APInt(32, uint64_t(-16LL)), APInt(32, "-10", 16));
   EXPECT_EQ(APInt(32, uint64_t(-31LL)), APInt(32, "-1F", 16));
   EXPECT_EQ(APInt(32, uint64_t(-32LL)), APInt(32, "-20", 16));
+
+  EXPECT_EQ(APInt(32,  0), APInt(32,  "0", 36));
+  EXPECT_EQ(APInt(32,  1), APInt(32,  "1", 36));
+  EXPECT_EQ(APInt(32, 35), APInt(32,  "Z", 36));
+  EXPECT_EQ(APInt(32, 36), APInt(32, "10", 36));
+  EXPECT_EQ(APInt(32, 71), APInt(32, "1Z", 36));
+  EXPECT_EQ(APInt(32, 72), APInt(32, "20", 36));
+  
+  EXPECT_EQ(APInt(32,  uint64_t(-0LL)), APInt(32,  "-0", 36));
+  EXPECT_EQ(APInt(32,  uint64_t(-1LL)), APInt(32,  "-1", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-35LL)), APInt(32,  "-Z", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-36LL)), APInt(32, "-10", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-71LL)), APInt(32, "-1Z", 36));
+  EXPECT_EQ(APInt(32, uint64_t(-72LL)), APInt(32, "-20", 36));
+}
+
+TEST(APIntTest, FromArray) {
+  EXPECT_EQ(APInt(32, uint64_t(1)), APInt(32, ArrayRef<uint64_t>(1)));
 }
 
 TEST(APIntTest, StringBitsNeeded2) {
@@ -315,6 +344,61 @@ TEST(APIntTest, StringBitsNeeded16) {
   EXPECT_EQ(9U, APInt::getBitsNeeded("-20", 16));
 }
 
+TEST(APIntTest, toString) {
+  SmallString<16> S;
+  bool isSigned;
+
+  APInt(8, 0).toString(S, 2, true, true);
+  EXPECT_EQ(S.str().str(), "0b0");
+  S.clear();
+  APInt(8, 0).toString(S, 8, true, true);
+  EXPECT_EQ(S.str().str(), "00");
+  S.clear();
+  APInt(8, 0).toString(S, 10, true, true);
+  EXPECT_EQ(S.str().str(), "0");
+  S.clear();
+  APInt(8, 0).toString(S, 16, true, true);
+  EXPECT_EQ(S.str().str(), "0x0");
+  S.clear();
+  APInt(8, 0).toString(S, 36, true, false);
+  EXPECT_EQ(S.str().str(), "0");
+  S.clear();
+
+  isSigned = false;
+  APInt(8, 255, isSigned).toString(S, 2, isSigned, true);
+  EXPECT_EQ(S.str().str(), "0b11111111");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 8, isSigned, true);
+  EXPECT_EQ(S.str().str(), "0377");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 10, isSigned, true);
+  EXPECT_EQ(S.str().str(), "255");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 16, isSigned, true);
+  EXPECT_EQ(S.str().str(), "0xFF");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 36, isSigned, false);
+  EXPECT_EQ(S.str().str(), "73");
+  S.clear();
+
+  isSigned = true;
+  APInt(8, 255, isSigned).toString(S, 2, isSigned, true);
+  EXPECT_EQ(S.str().str(), "-0b1");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 8, isSigned, true);
+  EXPECT_EQ(S.str().str(), "-01");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 10, isSigned, true);
+  EXPECT_EQ(S.str().str(), "-1");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 16, isSigned, true);
+  EXPECT_EQ(S.str().str(), "-0x1");
+  S.clear();
+  APInt(8, 255, isSigned).toString(S, 36, isSigned, false);
+  EXPECT_EQ(S.str().str(), "-1");
+  S.clear();
+}
+
 TEST(APIntTest, Log2) {
   EXPECT_EQ(APInt(15, 7).logBase2(), 2U);
   EXPECT_EQ(APInt(15, 7).ceilLogBase2(), 3U);
@@ -327,12 +411,32 @@ TEST(APIntTest, Log2) {
   EXPECT_EQ(APInt(15, 9).exactLogBase2(), -1);
 }
 
+TEST(APIntTest, magic) {
+  EXPECT_EQ(APInt(32, 3).magic().m, APInt(32, "55555556", 16));
+  EXPECT_EQ(APInt(32, 3).magic().s, 0U);
+  EXPECT_EQ(APInt(32, 5).magic().m, APInt(32, "66666667", 16));
+  EXPECT_EQ(APInt(32, 5).magic().s, 1U);
+  EXPECT_EQ(APInt(32, 7).magic().m, APInt(32, "92492493", 16));
+  EXPECT_EQ(APInt(32, 7).magic().s, 2U);
+}
+
+TEST(APIntTest, magicu) {
+  EXPECT_EQ(APInt(32, 3).magicu().m, APInt(32, "AAAAAAAB", 16));
+  EXPECT_EQ(APInt(32, 3).magicu().s, 1U);
+  EXPECT_EQ(APInt(32, 5).magicu().m, APInt(32, "CCCCCCCD", 16));
+  EXPECT_EQ(APInt(32, 5).magicu().s, 2U);
+  EXPECT_EQ(APInt(32, 7).magicu().m, APInt(32, "24924925", 16));
+  EXPECT_EQ(APInt(32, 7).magicu().s, 3U);
+  EXPECT_EQ(APInt(64, 25).magicu(1).m, APInt(64, "A3D70A3D70A3D70B", 16));
+  EXPECT_EQ(APInt(64, 25).magicu(1).s, 4U);
+}
+
 #ifdef GTEST_HAS_DEATH_TEST
 #ifndef NDEBUG
 TEST(APIntTest, StringDeath) {
   EXPECT_DEATH(APInt(0, "", 0), "Bitwidth too small");
   EXPECT_DEATH(APInt(32, "", 0), "Invalid string length");
-  EXPECT_DEATH(APInt(32, "0", 0), "Radix should be 2, 8, 10, or 16!");
+  EXPECT_DEATH(APInt(32, "0", 0), "Radix should be 2, 8, 10, 16, or 36!");
   EXPECT_DEATH(APInt(32, "", 10), "Invalid string length");
   EXPECT_DEATH(APInt(32, "-", 10), "String is only a sign, needs a value.");
   EXPECT_DEATH(APInt(1, "1234", 10), "Insufficient bit width");
@@ -342,5 +446,44 @@ TEST(APIntTest, StringDeath) {
 }
 #endif
 #endif
+
+TEST(APIntTest, mul_clear) {
+  APInt ValA(65, -1ULL);
+  APInt ValB(65, 4);
+  APInt ValC(65, 0);
+  ValC = ValA * ValB;
+  ValA *= ValB;
+  EXPECT_EQ(ValA.toString(10, false), ValC.toString(10, false));
+}
+
+TEST(APIntTest, Rotate) {
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 1).rotl(0));
+  EXPECT_EQ(APInt(8, 2),  APInt(8, 1).rotl(1));
+  EXPECT_EQ(APInt(8, 4),  APInt(8, 1).rotl(2));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 1).rotl(4));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 1).rotl(8));
+
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotl(0));
+  EXPECT_EQ(APInt(8, 32), APInt(8, 16).rotl(1));
+  EXPECT_EQ(APInt(8, 64), APInt(8, 16).rotl(2));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 16).rotl(4));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotl(8));
+
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotr(0));
+  EXPECT_EQ(APInt(8, 8),  APInt(8, 16).rotr(1));
+  EXPECT_EQ(APInt(8, 4),  APInt(8, 16).rotr(2));
+  EXPECT_EQ(APInt(8, 1),  APInt(8, 16).rotr(4));
+  EXPECT_EQ(APInt(8, 16), APInt(8, 16).rotr(8));
+
+  EXPECT_EQ(APInt(8, 1),   APInt(8, 1).rotr(0));
+  EXPECT_EQ(APInt(8, 128), APInt(8, 1).rotr(1));
+  EXPECT_EQ(APInt(8, 64),  APInt(8, 1).rotr(2));
+  EXPECT_EQ(APInt(8, 16),  APInt(8, 1).rotr(4));
+  EXPECT_EQ(APInt(8, 1),   APInt(8, 1).rotr(8));
+
+  APInt Big(256, "00004000800000000000000000003fff8000000000000000", 16);
+  APInt Rot(256, "3fff80000000000000000000000000000000000040008000", 16);
+  EXPECT_EQ(Rot, Big.rotr(144));
+}
 
 }

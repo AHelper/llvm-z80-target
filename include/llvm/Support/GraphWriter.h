@@ -26,7 +26,7 @@
 #include "llvm/Support/DOTGraphTraits.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/ADT/GraphTraits.h"
-#include "llvm/System/Path.h"
+#include "llvm/Support/Path.h"
 #include <vector>
 #include <cassert>
 
@@ -70,7 +70,7 @@ class GraphWriter {
     for (unsigned i = 0; EI != EE && i != 64; ++EI, ++i) {
       std::string label = DTraits.getEdgeSourceLabel(Node, EI);
 
-      if (label == "")
+      if (label.empty())
         continue;
 
       hasEdgeSourceLabels = true;
@@ -78,7 +78,7 @@ class GraphWriter {
       if (i)
         O << "|";
 
-      O << "<s" << i << ">" << DTraits.getEdgeSourceLabel(Node, EI);
+      O << "<s" << i << ">" << DOT::EscapeString(label);
     }
 
     if (EI != EE && hasEdgeSourceLabels)
@@ -89,14 +89,28 @@ class GraphWriter {
 
 public:
   GraphWriter(raw_ostream &o, const GraphType &g, bool SN) : O(o), G(g) {
-  DTraits = DOTTraits(SN); 
-}
+    DTraits = DOTTraits(SN);
+  }
 
-  void writeHeader(const std::string &Name) {
+  void writeGraph(const std::string &Title = "") {
+    // Output the header for the graph...
+    writeHeader(Title);
+
+    // Emit all of the nodes in the graph...
+    writeNodes();
+
+    // Output any customizations on the graph
+    DOTGraphTraits<GraphType>::addCustomGraphFeatures(G, *this);
+
+    // Output the end of the graph
+    writeFooter();
+  }
+
+  void writeHeader(const std::string &Title) {
     std::string GraphName = DTraits.getGraphName(G);
 
-    if (!Name.empty())
-      O << "digraph \"" << DOT::EscapeString(Name) << "\" {\n";
+    if (!Title.empty())
+      O << "digraph \"" << DOT::EscapeString(Title) << "\" {\n";
     else if (!GraphName.empty())
       O << "digraph \"" << DOT::EscapeString(GraphName) << "\" {\n";
     else
@@ -105,8 +119,8 @@ public:
     if (DTraits.renderGraphFromBottomUp())
       O << "\trankdir=\"BT\";\n";
 
-    if (!Name.empty())
-      O << "\tlabel=\"" << DOT::EscapeString(Name) << "\";\n";
+    if (!Title.empty())
+      O << "\tlabel=\"" << DOT::EscapeString(Title) << "\";\n";
     else if (!GraphName.empty())
       O << "\tlabel=\"" << DOT::EscapeString(GraphName) << "\";\n";
     O << DTraits.getGraphProperties(G);
@@ -221,12 +235,12 @@ public:
         DestPort = static_cast<int>(Offset);
       }
 
-      if (DTraits.getEdgeSourceLabel(Node, EI) == "")
+      if (DTraits.getEdgeSourceLabel(Node, EI).empty())
         edgeidx = -1;
 
       emitEdge(static_cast<const void*>(Node), edgeidx,
                static_cast<const void*>(TargetNode), DestPort,
-               DTraits.getEdgeAttributes(Node, EI));
+               DTraits.getEdgeAttributes(Node, EI, G));
     }
   }
 
@@ -258,7 +272,7 @@ public:
                 const void *DestNodeID, int DestNodePort,
                 const std::string &Attrs) {
     if (SrcNodePort  > 64) return;             // Eminating from truncated part?
-    if (DestNodePort > 64) DestNodePort = 64;  // Targetting the truncated part?
+    if (DestNodePort > 64) DestNodePort = 64;  // Targeting the truncated part?
 
     O << "\tNode" << SrcNodeID;
     if (SrcNodePort >= 0)
@@ -271,40 +285,37 @@ public:
       O << "[" << Attrs << "]";
     O << ";\n";
   }
+
+  /// getOStream - Get the raw output stream into the graph file. Useful to
+  /// write fancy things using addCustomGraphFeatures().
+  raw_ostream &getOStream() {
+    return O;
+  }
 };
 
 template<typename GraphType>
 raw_ostream &WriteGraph(raw_ostream &O, const GraphType &G,
                         bool ShortNames = false,
-                        const std::string &Name = "",
-                        const std::string &Title = "") {
+                        const Twine &Title = "") {
   // Start the graph emission process...
   GraphWriter<GraphType> W(O, G, ShortNames);
 
-  // Output the header for the graph...
-  W.writeHeader(Title);
+  // Emit the graph.
+  W.writeGraph(Title.str());
 
-  // Emit all of the nodes in the graph...
-  W.writeNodes();
-
-  // Output any customizations on the graph
-  DOTGraphTraits<GraphType>::addCustomGraphFeatures(G, W);
-
-  // Output the end of the graph
-  W.writeFooter();
   return O;
 }
 
 template<typename GraphType>
-sys::Path WriteGraph(const GraphType &G, const std::string &Name,
-                     bool ShortNames = false, const std::string &Title = "") {
+sys::Path WriteGraph(const GraphType &G, const Twine &Name,
+                     bool ShortNames = false, const Twine &Title = "") {
   std::string ErrMsg;
   sys::Path Filename = sys::Path::GetTemporaryDirectory(&ErrMsg);
   if (Filename.isEmpty()) {
     errs() << "Error: " << ErrMsg << "\n";
     return Filename;
   }
-  Filename.appendComponent(Name + ".dot");
+  Filename.appendComponent((Name + ".dot").str());
   if (Filename.makeUnique(true,&ErrMsg)) {
     errs() << "Error: " << ErrMsg << "\n";
     return sys::Path();
@@ -316,7 +327,7 @@ sys::Path WriteGraph(const GraphType &G, const std::string &Name,
   raw_fd_ostream O(Filename.c_str(), ErrorInfo);
 
   if (ErrorInfo.empty()) {
-    WriteGraph(O, G, ShortNames, Name, Title);
+    llvm::WriteGraph(O, G, ShortNames, Title);
     errs() << " done. \n";
   } else {
     errs() << "error opening file '" << Filename.str() << "' for writing!\n";
@@ -330,10 +341,10 @@ sys::Path WriteGraph(const GraphType &G, const std::string &Name,
 /// then cleanup.  For use from the debugger.
 ///
 template<typename GraphType>
-void ViewGraph(const GraphType &G, const std::string &Name,
-               bool ShortNames = false, const std::string &Title = "",
+void ViewGraph(const GraphType &G, const Twine &Name,
+               bool ShortNames = false, const Twine &Title = "",
                GraphProgram::Name Program = GraphProgram::DOT) {
-  sys::Path Filename = WriteGraph(G, Name, ShortNames, Title);
+  sys::Path Filename = llvm::WriteGraph(G, Name, ShortNames, Title);
 
   if (Filename.isEmpty())
     return;

@@ -15,16 +15,16 @@
 #ifndef XCOREISELLOWERING_H
 #define XCOREISELLOWERING_H
 
+#include "XCore.h"
 #include "llvm/CodeGen/SelectionDAG.h"
 #include "llvm/Target/TargetLowering.h"
-#include "XCore.h"
 
 namespace llvm {
-  
+
   // Forward delcarations
   class XCoreSubtarget;
   class XCoreTargetMachine;
-  
+
   namespace XCoreISD {
     enum NodeType {
       // Start the numbering where the builtin ops and target ops leave off.
@@ -38,16 +38,16 @@ namespace llvm {
 
       // dp relative address
       DPRelativeWrapper,
-      
+
       // cp relative address
       CPRelativeWrapper,
-      
+
       // Store word to stack
       STWSP,
 
       // Corresponds to retsp instruction
       RETSP,
-      
+
       // Corresponds to LADD instruction
       LADD,
 
@@ -74,13 +74,14 @@ namespace llvm {
   //===--------------------------------------------------------------------===//
   // TargetLowering Implementation
   //===--------------------------------------------------------------------===//
-  class XCoreTargetLowering : public TargetLowering 
+  class XCoreTargetLowering : public TargetLowering
   {
   public:
 
     explicit XCoreTargetLowering(XCoreTargetMachine &TM);
 
     virtual unsigned getJumpTableEncoding() const;
+    virtual MVT getShiftAmountTy(EVT LHSTy) const { return MVT::i32; }
 
     /// LowerOperation - Provide custom lowering hooks for some operations.
     virtual SDValue LowerOperation(SDValue Op, SelectionDAG &DAG) const;
@@ -91,24 +92,21 @@ namespace llvm {
     virtual void ReplaceNodeResults(SDNode *N, SmallVectorImpl<SDValue>&Results,
                                     SelectionDAG &DAG) const;
 
-    /// getTargetNodeName - This method returns the name of a target specific 
+    /// getTargetNodeName - This method returns the name of a target specific
     //  DAG node.
     virtual const char *getTargetNodeName(unsigned Opcode) const;
-  
+
     virtual MachineBasicBlock *
       EmitInstrWithCustomInserter(MachineInstr *MI,
                                   MachineBasicBlock *MBB) const;
 
     virtual bool isLegalAddressingMode(const AddrMode &AM,
-                                       const Type *Ty) const;
-
-    /// getFunctionAlignment - Return the Log2 alignment of this function.
-    virtual unsigned getFunctionAlignment(const Function *F) const;
+                                       Type *Ty) const;
 
   private:
     const XCoreTargetMachine &TM;
     const XCoreSubtarget &Subtarget;
-  
+
     // Lower Operand helpers
     SDValue LowerCCCArguments(SDValue Chain,
                               CallingConv::ID CallConv,
@@ -120,6 +118,7 @@ namespace llvm {
                            CallingConv::ID CallConv, bool isVarArg,
                            bool isTailCall,
                            const SmallVectorImpl<ISD::OutputArg> &Outs,
+                           const SmallVectorImpl<SDValue> &OutVals,
                            const SmallVectorImpl<ISD::InputArg> &Ins,
                            DebugLoc dl, SelectionDAG &DAG,
                            SmallVectorImpl<SDValue> &InVals) const;
@@ -146,12 +145,14 @@ namespace llvm {
     SDValue LowerUMUL_LOHI(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerSMUL_LOHI(SDValue Op, SelectionDAG &DAG) const;
     SDValue LowerFRAMEADDR(SDValue Op, SelectionDAG &DAG) const;
-  
+    SDValue LowerINIT_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
+    SDValue LowerADJUST_TRAMPOLINE(SDValue Op, SelectionDAG &DAG) const;
+
     // Inline asm support
-    std::vector<unsigned>
-    getRegClassForInlineAsmConstraint(const std::string &Constraint,
-              EVT VT) const;
-  
+    std::pair<unsigned, const TargetRegisterClass*>
+    getRegForInlineAsmConstraint(const std::string &Constraint,
+				 EVT VT) const;
+
     // Expand specifics
     SDValue TryExpandADDWithMul(SDNode *Op, SelectionDAG &DAG) const;
     SDValue ExpandADDSUB(SDNode *Op, SelectionDAG &DAG) const;
@@ -159,7 +160,6 @@ namespace llvm {
     virtual SDValue PerformDAGCombine(SDNode *N, DAGCombinerInfo &DCI) const;
 
     virtual void computeMaskedBitsForTargetNode(const SDValue Op,
-                                                const APInt &Mask,
                                                 APInt &KnownZero,
                                                 APInt &KnownOne,
                                                 const SelectionDAG &DAG,
@@ -174,10 +174,10 @@ namespace llvm {
                            SmallVectorImpl<SDValue> &InVals) const;
 
     virtual SDValue
-      LowerCall(SDValue Chain, SDValue Callee,
-                CallingConv::ID CallConv, bool isVarArg,
-                bool &isTailCall,
+      LowerCall(SDValue Chain, SDValue Callee, CallingConv::ID CallConv,
+                bool isVarArg, bool doesNotRet, bool &isTailCall,
                 const SmallVectorImpl<ISD::OutputArg> &Outs,
+                const SmallVectorImpl<SDValue> &OutVals,
                 const SmallVectorImpl<ISD::InputArg> &Ins,
                 DebugLoc dl, SelectionDAG &DAG,
                 SmallVectorImpl<SDValue> &InVals) const;
@@ -186,13 +186,14 @@ namespace llvm {
       LowerReturn(SDValue Chain,
                   CallingConv::ID CallConv, bool isVarArg,
                   const SmallVectorImpl<ISD::OutputArg> &Outs,
+                  const SmallVectorImpl<SDValue> &OutVals,
                   DebugLoc dl, SelectionDAG &DAG) const;
 
     virtual bool
-      CanLowerReturn(CallingConv::ID CallConv, bool isVarArg,
-                     const SmallVectorImpl<EVT> &OutTys,
-                     const SmallVectorImpl<ISD::ArgFlagsTy> &ArgsFlags,
-                     SelectionDAG &DAG) const;
+      CanLowerReturn(CallingConv::ID CallConv, MachineFunction &MF,
+		     bool isVarArg,
+                     const SmallVectorImpl<ISD::OutputArg> &ArgsFlags,
+                     LLVMContext &Context) const;
   };
 }
 

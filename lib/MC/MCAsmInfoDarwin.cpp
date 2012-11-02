@@ -13,7 +13,12 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/MC/MCAsmInfoDarwin.h"
+#include "llvm/MC/MCContext.h"
+#include "llvm/MC/MCExpr.h"
+#include "llvm/MC/MCStreamer.h"
 using namespace llvm;
+
+void MCAsmInfoDarwin::anchor() { } 
 
 MCAsmInfoDarwin::MCAsmInfoDarwin() {
   // Common settings for all Darwin targets.
@@ -37,12 +42,31 @@ MCAsmInfoDarwin::MCAsmInfoDarwin() {
   HasMachoZeroFillDirective = true;  // Uses .zerofill
   HasMachoTBSSDirective = true; // Uses .tbss
   HasStaticCtorDtorReferenceInStaticMode = true;
-  
+
+  CodeBegin = "L$start$code$";
+  DataBegin = "L$start$data$";
+  JT8Begin  = "L$start$jt8$";
+  JT16Begin = "L$start$jt16$";
+  JT32Begin = "L$start$jt32$";
+  SupportsDataRegions = true;
+
+  // FIXME: Darwin 10 and newer don't need this.
+  LinkerRequiresNonEmptyDwarfLines = true;
+
+  // FIXME: Change this once MC is the system assembler.
+  HasAggressiveSymbolFolding = false;
+
   HiddenVisibilityAttr = MCSA_PrivateExtern;
+  HiddenDeclarationVisibilityAttr = MCSA_Invalid;
+
   // Doesn't support protected visibility.
-  ProtectedVisibilityAttr = MCSA_Global;
+  ProtectedVisibilityAttr = MCSA_Invalid;
   
   HasDotTypeDotSizeDirective = false;
   HasNoDeadStrip = true;
-}
+  HasSymbolResolver = true;
 
+  DwarfRequiresRelocationForSectionOffset = false;
+  DwarfUsesLabelOffsetForRanges = false;
+  DwarfUsesRelocationsForStringPool = false;
+}

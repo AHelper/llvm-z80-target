@@ -1,4 +1,4 @@
-//===-- SPUTargetMachine.h - Define TargetMachine for Cell SPU ----*- C++ -*-=//
+//===-- SPUTargetMachine.h - Define TargetMachine for Cell SPU --*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -18,14 +18,11 @@
 #include "SPUInstrInfo.h"
 #include "SPUISelLowering.h"
 #include "SPUSelectionDAGInfo.h"
-#include "SPUFrameInfo.h"
+#include "SPUFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
 #include "llvm/Target/TargetData.h"
 
 namespace llvm {
-class PassManager;
-class GlobalValue;
-class TargetFrameInfo;
 
 /// SPUTargetMachine
 ///
@@ -33,13 +30,15 @@ class SPUTargetMachine : public LLVMTargetMachine {
   SPUSubtarget        Subtarget;
   const TargetData    DataLayout;
   SPUInstrInfo        InstrInfo;
-  SPUFrameInfo        FrameInfo;
+  SPUFrameLowering    FrameLowering;
   SPUTargetLowering   TLInfo;
   SPUSelectionDAGInfo TSInfo;
   InstrItineraryData  InstrItins;
 public:
-  SPUTargetMachine(const Target &T, const std::string &TT,
-                   const std::string &FS);
+  SPUTargetMachine(const Target &T, StringRef TT,
+                   StringRef CPU, StringRef FS, const TargetOptions &Options,
+                   Reloc::Model RM, CodeModel::Model CM,
+                   CodeGenOpt::Level OL);
 
   /// Return the subtarget implementation object
   virtual const SPUSubtarget     *getSubtargetImpl() const {
@@ -48,8 +47,8 @@ public:
   virtual const SPUInstrInfo     *getInstrInfo() const {
     return &InstrInfo;
   }
-  virtual const SPUFrameInfo     *getFrameInfo() const {
-    return &FrameInfo;
+  virtual const SPUFrameLowering *getFrameLowering() const {
+    return &FrameLowering;
   }
   /*!
     \note Cell SPU does not support JIT today. It could support JIT at some
@@ -59,7 +58,7 @@ public:
     return NULL;
   }
 
-  virtual const SPUTargetLowering *getTargetLowering() const { 
+  virtual const SPUTargetLowering *getTargetLowering() const {
    return &TLInfo;
   }
 
@@ -70,18 +69,17 @@ public:
   virtual const SPURegisterInfo *getRegisterInfo() const {
     return &InstrInfo.getRegisterInfo();
   }
-  
+
   virtual const TargetData *getTargetData() const {
     return &DataLayout;
   }
 
-  virtual const InstrItineraryData getInstrItineraryData() const {
-    return InstrItins;
+  virtual const InstrItineraryData *getInstrItineraryData() const {
+    return &InstrItins;
   }
-  
+
   // Pass Pipeline Configuration
-  virtual bool addInstSelector(PassManagerBase &PM,
-                               CodeGenOpt::Level OptLevel);
+  virtual TargetPassConfig *createPassConfig(PassManagerBase &PM);
 };
 
 } // end namespace llvm

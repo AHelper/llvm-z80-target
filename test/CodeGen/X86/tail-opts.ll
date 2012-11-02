@@ -62,11 +62,11 @@ declare i8* @choose(i8*, i8*)
 
 ; CHECK: tail_duplicate_me:
 ; CHECK:      movl $0, GHJK(%rip)
-; CHECK-NEXT: jmpq *%rbx
+; CHECK-NEXT: jmpq *%r
 ; CHECK:      movl $0, GHJK(%rip)
-; CHECK-NEXT: jmpq *%rbx
+; CHECK-NEXT: jmpq *%r
 ; CHECK:      movl $0, GHJK(%rip)
-; CHECK-NEXT: jmpq *%rbx
+; CHECK-NEXT: jmpq *%r
 
 define void @tail_duplicate_me() nounwind {
 entry:
@@ -109,18 +109,19 @@ altret:
 
 ; CHECK: dont_merge_oddly:
 ; CHECK-NOT:   ret
-; CHECK:        ucomiss %xmm1, %xmm2
+; CHECK:        ucomiss %xmm{{[0-2]}}, %xmm{{[0-2]}}
 ; CHECK-NEXT:   jbe .LBB2_3
-; CHECK-NEXT:   ucomiss %xmm0, %xmm1
+; CHECK-NEXT:   ucomiss %xmm{{[0-2]}}, %xmm{{[0-2]}}
 ; CHECK-NEXT:   ja .LBB2_4
-; CHECK-NEXT: .LBB2_2:
-; CHECK-NEXT:   movb $1, %al
-; CHECK-NEXT:   ret
+; CHECK-NEXT:   jmp .LBB2_2
 ; CHECK-NEXT: .LBB2_3:
-; CHECK-NEXT:   ucomiss %xmm0, %xmm2
+; CHECK-NEXT:   ucomiss %xmm{{[0-2]}}, %xmm{{[0-2]}}
 ; CHECK-NEXT:   jbe .LBB2_2
 ; CHECK-NEXT: .LBB2_4:
 ; CHECK-NEXT:   xorb %al, %al
+; CHECK-NEXT:   ret
+; CHECK-NEXT: .LBB2_2:
+; CHECK-NEXT:   movb $1, %al
 ; CHECK-NEXT:   ret
 
 define i1 @dont_merge_oddly(float* %result) nounwind {
@@ -153,19 +154,20 @@ bb30:
 ; an unconditional jump to complete a two-way conditional branch.
 
 ; CHECK: c_expand_expr_stmt:
-; CHECK:        jmp .LBB3_7
-; CHECK-NEXT: .LBB3_12:
-; CHECK-NEXT:   movq 8(%rax), %rax
-; CHECK-NEXT:   movb 16(%rax), %al
-; CHECK-NEXT:   cmpb $16, %al
-; CHECK-NEXT:   je .LBB3_6
-; CHECK-NEXT:   cmpb $23, %al
-; CHECK-NEXT:   je .LBB3_6
-; CHECK-NEXT:   jmp .LBB3_15
-; CHECK-NEXT: .LBB3_14:
-; CHECK-NEXT:   cmpb $23, %bl
-; CHECK-NEXT:   jne .LBB3_15
-; CHECK-NEXT: .LBB3_15:
+;
+; This test only works when register allocation happens to use %rax for both
+; load addresses.
+;
+; CHE:        jmp .LBB3_11
+; CHE-NEXT: .LBB3_9:
+; CHE-NEXT:   movq 8(%rax), %rax
+; CHE-NEXT:   xorb %dl, %dl
+; CHE-NEXT:   movb 16(%rax), %al
+; CHE-NEXT:   cmpb $16, %al
+; CHE-NEXT:   je .LBB3_11
+; CHE-NEXT:   cmpb $23, %al
+; CHE-NEXT:   jne .LBB3_14
+; CHE-NEXT: .LBB3_11:
 
 %0 = type { %struct.rtx_def* }
 %struct.lang_decl = type opaque
@@ -276,7 +278,7 @@ declare fastcc %union.tree_node* @default_conversion(%union.tree_node*) nounwind
 ; CHECK: foo:
 ; CHECK:        callq func
 ; CHECK-NEXT: .LBB4_2:
-; CHECK-NEXT:   addq $8, %rsp
+; CHECK-NEXT:   popq
 ; CHECK-NEXT:   ret
 
 define void @foo(i1* %V) nounwind {
@@ -313,7 +315,7 @@ bby:
   ]
 
 bb7:
-  volatile store i32 0, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
   unreachable
 
 bbx:
@@ -322,7 +324,7 @@ bbx:
   ]
 
 bb12:
-  volatile store i32 0, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
   unreachable
 
 return:
@@ -335,10 +337,10 @@ return:
 
 ; CHECK: two:
 ; CHECK-NOT: XYZ
+; CHECK: ret
 ; CHECK: movl $0, XYZ(%rip)
 ; CHECK: movl $1, XYZ(%rip)
 ; CHECK-NOT: XYZ
-; CHECK: ret
 
 define void @two() nounwind optsize {
 entry:
@@ -351,8 +353,8 @@ bby:
   ]
 
 bb7:
-  volatile store i32 0, i32* @XYZ
-  volatile store i32 1, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
+  store volatile i32 1, i32* @XYZ
   unreachable
 
 bbx:
@@ -361,8 +363,8 @@ bbx:
   ]
 
 bb12:
-  volatile store i32 0, i32* @XYZ
-  volatile store i32 1, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
+  store volatile i32 1, i32* @XYZ
   unreachable
 
 return:
@@ -389,8 +391,8 @@ bby:
   ]
 
 bb7:
-  volatile store i32 0, i32* @XYZ
-  volatile store i32 1, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
+  store volatile i32 1, i32* @XYZ
   unreachable
 
 bbx:
@@ -399,8 +401,8 @@ bbx:
   ]
 
 bb12:
-  volatile store i32 0, i32* @XYZ
-  volatile store i32 1, i32* @XYZ
+  store volatile i32 0, i32* @XYZ
+  store volatile i32 1, i32* @XYZ
   unreachable
 
 return:
@@ -411,9 +413,9 @@ return:
 ; can fall-through into the ret and the other side has to branch anyway.
 
 ; CHECK: TESTE:
-; CHECK: imulq
-; CHECK-NEXT: LBB8_2:
-; CHECK-NEXT: ret
+; CHECK: ret
+; CHECK-NOT: ret
+; CHECK: size TESTE
 
 define i64 @TESTE(i64 %parami, i64 %paraml) nounwind readnone {
 entry:

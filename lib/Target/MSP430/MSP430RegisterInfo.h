@@ -1,4 +1,4 @@
-//===- MSP430RegisterInfo.h - MSP430 Register Information Impl --*- C++ -*-===//
+//===-- MSP430RegisterInfo.h - MSP430 Register Information Impl -*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -15,7 +15,9 @@
 #define LLVM_TARGET_MSP430REGISTERINFO_H
 
 #include "llvm/Target/TargetRegisterInfo.h"
-#include "MSP430GenRegisterInfo.h.inc"
+
+#define GET_REGINFO_HEADER
+#include "MSP430GenRegisterInfo.inc"
 
 namespace llvm {
 
@@ -34,33 +36,22 @@ public:
   MSP430RegisterInfo(MSP430TargetMachine &tm, const TargetInstrInfo &tii);
 
   /// Code Generation virtual methods...
-  const unsigned *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
+  const uint16_t *getCalleeSavedRegs(const MachineFunction *MF = 0) const;
 
   BitVector getReservedRegs(const MachineFunction &MF) const;
   const TargetRegisterClass* getPointerRegClass(unsigned Kind = 0) const;
-
-  bool hasFP(const MachineFunction &MF) const;
-  bool hasReservedCallFrame(MachineFunction &MF) const;
 
   void eliminateCallFramePseudoInstr(MachineFunction &MF,
                                      MachineBasicBlock &MBB,
                                      MachineBasicBlock::iterator I) const;
 
-  unsigned eliminateFrameIndex(MachineBasicBlock::iterator II,
-                               int SPAdj, FrameIndexValue *Value = NULL,
-                               RegScavenger *RS = NULL) const;
-
-  void emitPrologue(MachineFunction &MF) const;
-  void emitEpilogue(MachineFunction &MF, MachineBasicBlock &MBB) const;
+  void eliminateFrameIndex(MachineBasicBlock::iterator II,
+                           int SPAdj, RegScavenger *RS = NULL) const;
 
   void processFunctionBeforeFrameFinalized(MachineFunction &MF) const;
 
   // Debug information queries.
-  unsigned getRARegister() const;
   unsigned getFrameRegister(const MachineFunction &MF) const;
-
-  //! Get DWARF debugging register number
-  int getDwarfRegNum(unsigned RegNum, bool isEH) const;
 };
 
 } // end namespace llvm

@@ -1,4 +1,4 @@
-//==-- MSP430TargetMachine.h - Define TargetMachine for MSP430 ---*- C++ -*-==//
+//===-- MSP430TargetMachine.h - Define TargetMachine for MSP430 -*- C++ -*-===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -17,11 +17,12 @@
 
 #include "MSP430InstrInfo.h"
 #include "MSP430ISelLowering.h"
+#include "MSP430FrameLowering.h"
 #include "MSP430SelectionDAGInfo.h"
 #include "MSP430RegisterInfo.h"
 #include "MSP430Subtarget.h"
 #include "llvm/Target/TargetData.h"
-#include "llvm/Target/TargetFrameInfo.h"
+#include "llvm/Target/TargetFrameLowering.h"
 #include "llvm/Target/TargetMachine.h"
 
 namespace llvm {
@@ -34,16 +35,17 @@ class MSP430TargetMachine : public LLVMTargetMachine {
   MSP430InstrInfo        InstrInfo;
   MSP430TargetLowering   TLInfo;
   MSP430SelectionDAGInfo TSInfo;
-
-  // MSP430 does not have any call stack frame, therefore not having
-  // any MSP430 specific FrameInfo class.
-  TargetFrameInfo       FrameInfo;
+  MSP430FrameLowering    FrameLowering;
 
 public:
-  MSP430TargetMachine(const Target &T, const std::string &TT,
-                      const std::string &FS);
+  MSP430TargetMachine(const Target &T, StringRef TT,
+                      StringRef CPU, StringRef FS, const TargetOptions &Options,
+                      Reloc::Model RM, CodeModel::Model CM,
+                      CodeGenOpt::Level OL);
 
-  virtual const TargetFrameInfo *getFrameInfo() const { return &FrameInfo; }
+  virtual const TargetFrameLowering *getFrameLowering() const {
+    return &FrameLowering;
+  }
   virtual const MSP430InstrInfo *getInstrInfo() const  { return &InstrInfo; }
   virtual const TargetData *getTargetData() const     { return &DataLayout;}
   virtual const MSP430Subtarget *getSubtargetImpl() const { return &Subtarget; }
@@ -60,8 +62,7 @@ public:
     return &TSInfo;
   }
 
-  virtual bool addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
-  virtual bool addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel);
+  virtual TargetPassConfig *createPassConfig(PassManagerBase &PM);
 }; // MSP430TargetMachine.
 
 } // end namespace llvm

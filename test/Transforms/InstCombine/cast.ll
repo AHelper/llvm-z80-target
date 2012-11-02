@@ -99,14 +99,6 @@ define void @test11(i32* %P) {
 ; CHECK: ret void
 }
 
-define i32* @test12() {
-        %p = malloc [4 x i8]            ; <[4 x i8]*> [#uses=1]
-        %c = bitcast [4 x i8]* %p to i32*               ; <i32*> [#uses=1]
-        ret i32* %c
-; CHECK: %malloccall = tail call i8* @malloc(i32 4)
-; CHECK: ret i32* %c
-}
-
 define i8* @test13(i64 %A) {
         %c = getelementptr [0 x i8]* bitcast ([32832 x i8]* @inbuf to [0 x i8]*), i64 0, i64 %A             ; <i8*> [#uses=1]
         ret i8* %c
@@ -265,20 +257,9 @@ define i1 @test31(i64 %A) {
         %C = and i32 %B, 42             ; <i32> [#uses=1]
         %D = icmp eq i32 %C, 10         ; <i1> [#uses=1]
         ret i1 %D
-; CHECK: %C1 = and i64 %A, 42
-; CHECK: %D = icmp eq i64 %C1, 10
+; CHECK: %C = and i64 %A, 42
+; CHECK: %D = icmp eq i64 %C, 10
 ; CHECK: ret i1 %D
-}
-
-define void @test32(double** %tmp) {
-        %tmp8 = malloc [16 x i8]                ; <[16 x i8]*> [#uses=1]
-        %tmp8.upgrd.1 = bitcast [16 x i8]* %tmp8 to double*             ; <double*> [#uses=1]
-        store double* %tmp8.upgrd.1, double** %tmp
-        ret void
-; CHECK: %malloccall = tail call i8* @malloc(i32 16)
-; CHECK: %tmp8.upgrd.1 = bitcast i8* %malloccall to double*
-; CHECK: store double* %tmp8.upgrd.1, double** %tmp
-; CHECK: ret void
 }
 
 define i32 @test33(i32 %c1) {
@@ -437,8 +418,8 @@ define i64 @test47(i8 %A) {
  ret i64 %E
 ; CHECK: @test47
 ; CHECK-NEXT:   %B = sext i8 %A to i64
-; CHECK-NEXT: %C = or i64 %B, 42
-; CHECK-NEXT:  %E = and i64 %C, 4294967295
+; CHECK-NEXT: %C = and i64 %B, 4294967253
+; CHECK-NEXT:  %E = or i64 %C, 42
 ; CHECK-NEXT:  ret i64 %E
 }
 
@@ -452,7 +433,7 @@ define i64 @test48(i8 %A, i8 %a) {
 ; CHECK: @test48
 ; CHECK-NEXT: %b = zext i8 %a to i64
 ; CHECK-NEXT: %B = zext i8 %A to i64
-; CHECK-NEXT: %C = shl i64 %B, 8
+; CHECK-NEXT: %C = shl nuw nsw i64 %B, 8
 ; CHECK-NEXT: %D = or i64 %C, %b
 ; CHECK-NEXT: ret i64 %D
 }
@@ -464,7 +445,7 @@ define i64 @test49(i64 %A) {
  ret i64 %D
 ; CHECK: @test49
 ; CHECK-NEXT: %C = shl i64 %A, 32
-; CHECK-NEXT: ashr i64 %C, 32
+; CHECK-NEXT: ashr exact i64 %C, 32
 ; CHECK-NEXT: %D = or i64 {{.*}}, 1
 ; CHECK-NEXT: ret i64 %D
 }
@@ -478,8 +459,8 @@ define i64 @test50(i64 %A) {
 ; CHECK: @test50
 ; CHECK-NEXT: shl i64 %A, 30
 ; CHECK-NEXT: add i64 {{.*}}, -4294967296
-; CHECK-NEXT: %E = ashr i64 {{.*}}, 32
-; CHECK-NEXT: ret i64 %E
+; CHECK-NEXT: %sext = ashr i64 {{.*}}, 32
+; CHECK-NEXT: ret i64 %sext
 }
 
 define i64 @test51(i64 %A, i1 %cond) {
@@ -508,8 +489,8 @@ define i32 @test52(i64 %A) {
   ret i32 %E
 ; CHECK: @test52
 ; CHECK-NEXT: %B = trunc i64 %A to i32
-; CHECK-NEXT: %C = or i32 %B, 32962
-; CHECK-NEXT: %D = and i32 %C, 40186
+; CHECK-NEXT: %C = and i32 %B, 7224
+; CHECK-NEXT: %D = or i32 %C, 32962
 ; CHECK-NEXT: ret i32 %D
 }
 
@@ -521,8 +502,8 @@ define i64 @test53(i32 %A) {
   ret i64 %E
 ; CHECK: @test53
 ; CHECK-NEXT: %B = zext i32 %A to i64
-; CHECK-NEXT: %C = or i64 %B, 32962
-; CHECK-NEXT: %D = and i64 %C, 40186
+; CHECK-NEXT: %C = and i64 %B, 7224
+; CHECK-NEXT: %D = or i64 %C, 32962
 ; CHECK-NEXT: ret i64 %D
 }
 
@@ -534,8 +515,8 @@ define i32 @test54(i64 %A) {
   ret i32 %E
 ; CHECK: @test54
 ; CHECK-NEXT: %B = trunc i64 %A to i32
-; CHECK-NEXT: %C = or i32 %B, -32574
-; CHECK-NEXT: %D = and i32 %C, -25350
+; CHECK-NEXT: %C = and i32 %B, 7224
+; CHECK-NEXT: %D = or i32 %C, -32574
 ; CHECK-NEXT: ret i32 %D
 }
 
@@ -547,8 +528,8 @@ define i64 @test55(i32 %A) {
   ret i64 %E
 ; CHECK: @test55
 ; CHECK-NEXT: %B = zext i32 %A to i64
-; CHECK-NEXT: %C = or i64 %B, -32574
-; CHECK-NEXT: %D = and i64 %C, -25350
+; CHECK-NEXT: %C = and i64 %B, 7224
+; CHECK-NEXT: %D = or i64 %C, -32574
 ; CHECK-NEXT: ret i64 %D
 }
 
@@ -584,8 +565,8 @@ define i64 @test58(i64 %A) nounwind {
  
 ; CHECK: @test58
 ; CHECK-NEXT:   %C = lshr i64 %A, 8
-; CHECK-NEXT:   %D = or i64 %C, 128
-; CHECK-NEXT:   %E = and i64 %D, 16777215
+; CHECK-NEXT:   %D = and i64 %C, 16777087
+; CHECK-NEXT:   %E = or i64 %D, 128
 ; CHECK-NEXT:   ret i64 %E
 }
 
@@ -638,3 +619,61 @@ define <4 x i32> @test62(<3 x float> %call4) nounwind {
 ; CHECK-NEXT: ret
 }
 
+; PR7311 - Don't create invalid IR on scalar->vector cast.
+define <2 x float> @test63(i64 %tmp8) nounwind {
+entry:
+  %a = bitcast i64 %tmp8 to <2 x i32>           
+  %vcvt.i = uitofp <2 x i32> %a to <2 x float>  
+  ret <2 x float> %vcvt.i
+; CHECK: @test63
+; CHECK: bitcast
+; CHECK: uitofp
+}
+
+define <4 x float> @test64(<4 x float> %c) nounwind {
+  %t0 = bitcast <4 x float> %c to <4 x i32>
+  %t1 = bitcast <4 x i32> %t0 to <4 x float>
+  ret <4 x float> %t1
+; CHECK: @test64
+; CHECK-NEXT: ret <4 x float> %c
+}
+
+define <4 x float> @test65(<4 x float> %c) nounwind {
+  %t0 = bitcast <4 x float> %c to <2 x double>
+  %t1 = bitcast <2 x double> %t0 to <4 x float>
+  ret <4 x float> %t1
+; CHECK: @test65
+; CHECK-NEXT: ret <4 x float> %c
+}
+
+define <2 x float> @test66(<2 x float> %c) nounwind {
+  %t0 = bitcast <2 x float> %c to double
+  %t1 = bitcast double %t0 to <2 x float>
+  ret <2 x float> %t1
+; CHECK: @test66
+; CHECK-NEXT: ret <2 x float> %c
+}
+
+define float @test2c() {
+  ret float extractelement (<2 x float> bitcast (double bitcast (<2 x float> <float -1.000000e+00, float -1.000000e+00> to double) to <2 x float>), i32 0)
+; CHECK: @test2c
+; CHECK-NOT: extractelement
+}
+
+define i64 @test_mmx(<2 x i32> %c) nounwind {
+  %A = bitcast <2 x i32> %c to x86_mmx
+  %B = bitcast x86_mmx %A to <2 x i32>
+  %C = bitcast <2 x i32> %B to i64
+  ret i64 %C
+; CHECK: @test_mmx
+; CHECK-NOT: x86_mmx
+}
+
+define i64 @test_mmx_const(<2 x i32> %c) nounwind {
+  %A = bitcast <2 x i32> zeroinitializer to x86_mmx
+  %B = bitcast x86_mmx %A to <2 x i32>
+  %C = bitcast <2 x i32> %B to i64
+  ret i64 %C
+; CHECK: @test_mmx_const
+; CHECK-NOT: x86_mmx
+}

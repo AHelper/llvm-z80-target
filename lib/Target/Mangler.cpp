@@ -22,12 +22,13 @@
 #include "llvm/ADT/Twine.h"
 using namespace llvm;
 
-static bool isAcceptableChar(char C, bool AllowPeriod) {
+static bool isAcceptableChar(char C, bool AllowPeriod, bool AllowUTF8) {
   if ((C < 'a' || C > 'z') &&
       (C < 'A' || C > 'Z') &&
       (C < '0' || C > '9') &&
       C != '_' && C != '$' && C != '@' &&
-      !(AllowPeriod && C == '.'))
+      !(AllowPeriod && C == '.') &&
+      !(AllowUTF8 && (C & 0x80)))
     return false;
   return true;
 }
@@ -56,8 +57,9 @@ static bool NameNeedsEscaping(StringRef Str, const MCAsmInfo &MAI) {
   // If any of the characters in the string is an unacceptable character, force
   // quotes.
   bool AllowPeriod = MAI.doesAllowPeriodsInName();
+  bool AllowUTF8 = MAI.doesAllowUTF8();
   for (unsigned i = 0, e = Str.size(); i != e; ++i)
-    if (!isAcceptableChar(Str[i], AllowPeriod))
+    if (!isAcceptableChar(Str[i], AllowPeriod, AllowUTF8))
       return true;
   return false;
 }
@@ -74,8 +76,9 @@ static void appendMangledName(SmallVectorImpl<char> &OutName, StringRef Str,
   }
 
   bool AllowPeriod = MAI.doesAllowPeriodsInName();
+  bool AllowUTF8 = MAI.doesAllowUTF8();
   for (unsigned i = 0, e = Str.size(); i != e; ++i) {
-    if (!isAcceptableChar(Str[i], AllowPeriod))
+    if (!isAcceptableChar(Str[i], AllowPeriod, AllowUTF8))
       MangleLetter(OutName, Str[i]);
     else
       OutName.push_back(Str[i]);
@@ -159,7 +162,7 @@ static void AddFastCallStdCallSuffix(SmallVectorImpl<char> &OutName,
   unsigned ArgWords = 0;
   for (Function::const_arg_iterator AI = F->arg_begin(), AE = F->arg_end();
        AI != AE; ++AI) {
-    const Type *Ty = AI->getType();
+    Type *Ty = AI->getType();
     // 'Dereference' type in case of byval parameter attribute
     if (AI->hasByValAttr())
       Ty = cast<PointerType>(Ty)->getElementType();
@@ -180,7 +183,8 @@ void Mangler::getNameWithPrefix(SmallVectorImpl<char> &OutName,
   ManglerPrefixTy PrefixTy = Mangler::Default;
   if (GV->hasPrivateLinkage() || isImplicitlyPrivate)
     PrefixTy = Mangler::Private;
-  else if (GV->hasLinkerPrivateLinkage() || GV->hasLinkerPrivateWeakLinkage())
+  else if (GV->hasLinkerPrivateLinkage() || GV->hasLinkerPrivateWeakLinkage() ||
+           GV->hasLinkerPrivateWeakDefAutoLinkage())
     PrefixTy = Mangler::LinkerPrivate;
   
   // If this global has a name, handle it simply.
@@ -213,7 +217,7 @@ void Mangler::getNameWithPrefix(SmallVectorImpl<char> &OutName,
     
       // fastcall and stdcall functions usually need @42 at the end to specify
       // the argument info.
-      const FunctionType *FT = F->getFunctionType();
+      FunctionType *FT = F->getFunctionType();
       if ((CC == CallingConv::X86_FastCall || CC == CallingConv::X86_StdCall) &&
           // "Pure" variadic functions do not receive @0 suffix.
           (!FT->isVarArg() || FT->getNumParams() == 0 ||
@@ -221,16 +225,6 @@ void Mangler::getNameWithPrefix(SmallVectorImpl<char> &OutName,
         AddFastCallStdCallSuffix(OutName, F, TD);
     }
   }
-}
-
-/// getNameWithPrefix - Fill OutName with the name of the appropriate prefix
-/// and the specified global variable's name.  If the global variable doesn't
-/// have a name, this fills in a unique name for the global.
-std::string Mangler::getNameWithPrefix(const GlobalValue *GV,
-                                       bool isImplicitlyPrivate) {
-  SmallString<64> Buf;
-  getNameWithPrefix(Buf, GV, isImplicitlyPrivate);
-  return std::string(Buf.begin(), Buf.end());
 }
 
 /// getSymbol - Return the MCSymbol for the specified global value.  This

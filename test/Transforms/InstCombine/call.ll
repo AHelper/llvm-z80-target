@@ -9,8 +9,8 @@ declare void @test1a(i8*)
 define void @test1(i32* %A) {
         call void bitcast (void (i8*)* @test1a to void (i32*)*)( i32* %A )
         ret void
-; CHECK: %tmp = bitcast i32* %A to i8*
-; CHECK: call void @test1a(i8* %tmp)
+; CHECK: %1 = bitcast i32* %A to i8*
+; CHECK: call void @test1a(i8* %1)
 ; CHECK: ret void
 }
 
@@ -24,22 +24,22 @@ define void @test2a(i8 %A) {
 define i32 @test2(i32 %A) {
         call void bitcast (void (i8)* @test2a to void (i32)*)( i32 %A )
         ret i32 %A
-; CHECK: %tmp = trunc i32 %A to i8
-; CHECK: call void @test2a(i8 %tmp)
+; CHECK: %1 = trunc i32 %A to i8
+; CHECK: call void @test2a(i8 %1)
 ; CHECK: ret i32 %A
 }
 
 
 ; Resolving this should insert a cast from sbyte to int, following the C 
 ; promotion rules.
-declare void @test3a(i8, ...)
+define void @test3a(i8, ...) {unreachable }
 
 define void @test3(i8 %A, i8 %B) {
         call void bitcast (void (i8, ...)* @test3a to void (i8, i8)*)( i8 %A, i8 %B 
 )
         ret void
-; CHECK: %tmp = zext i8 %B to i32
-; CHECK: call void (i8, ...)* @test3a(i8 %A, i32 %tmp)
+; CHECK: %1 = zext i8 %B to i32
+; CHECK: call void (i8, ...)* @test3a(i8 %A, i32 %1)
 ; CHECK: ret void
 }
 
@@ -53,9 +53,9 @@ define i8 @test4a() {
 define i32 @test4() {
         %X = call i32 bitcast (i8 ()* @test4a to i32 ()*)( )            ; <i32> [#uses=1]
         ret i32 %X
-; CHECK: %X1 = call i8 @test4a()
-; CHECK: %tmp = zext i8 %X1 to i32
-; CHECK: ret i32 %tmp
+; CHECK: %X = call i8 @test4a()
+; CHECK: %1 = zext i8 %X to i32
+; CHECK: ret i32 %1
 }
 
 
@@ -77,8 +77,8 @@ declare i32 @test6a(i32)
 define i32 @test6() {
         %X = call i32 bitcast (i32 (i32)* @test6a to i32 ()*)( )
         ret i32 %X
-; CHECK: %X1 = call i32 @test6a(i32 0)
-; CHECK: ret i32 %X1
+; CHECK: %X = call i32 @test6a(i32 0)
+; CHECK: ret i32 %X
 }
 
 
@@ -107,12 +107,30 @@ invoke.cont:                                      ; preds = %entry
   unreachable
 
 try.handler:                                      ; preds = %entry
+  %exn = landingpad {i8*, i32} personality i32 (...)* @__gxx_personality_v0
+            cleanup
   ret i8* null
 }
+
+declare i32 @__gxx_personality_v0(...)
 
 ; Don't turn this into "unreachable": the callee and caller don't agree in
 ; calling conv, but the implementation of test8a may actually end up using the
 ; right calling conv.
 ; CHECK: @test8() {
 ; CHECK-NEXT: invoke void @test8a()
+
+
+
+; Don't turn this into a direct call, because test9x is just a prototype and 
+; doing so will make it varargs.
+; rdar://9038601
+declare i8* @test9x(i8*, i8*, ...) noredzone
+define i8* @test9(i8* %arg, i8* %tmp3) nounwind ssp noredzone {
+entry:
+  %call = call i8* bitcast (i8* (i8*, i8*, ...)* @test9x to i8* (i8*, i8*)*)(i8* %arg, i8* %tmp3) noredzone
+  ret i8* %call
+; CHECK: @test9(
+; CHECK: call i8* bitcast
+}
 

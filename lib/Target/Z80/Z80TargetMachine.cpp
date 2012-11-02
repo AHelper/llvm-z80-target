@@ -1,4 +1,4 @@
-//===-- SparcTargetMachine.cpp - Define TargetMachine for Sparc -----------===//
+//===-- Z80TargetMachine.cpp - Define TargetMachine for Z80 -----------===//
 //
 //                     The LLVM Compiler Infrastructure
 //
@@ -10,41 +10,88 @@
 //
 //===----------------------------------------------------------------------===//
 
-//#include "SparcMCAsmInfo.h"
 #include "Z80TargetMachine.h"
-//#include "Sparc.h"
+#include "Z80.h"
 #include "llvm/PassManager.h"
-#include "llvm/Target/TargetRegistry.h"
-
+#include "llvm/CodeGen/Passes.h"
+#include "llvm/Support/TargetRegistry.h"
 using namespace llvm;
 
 extern "C" void LLVMInitializeZ80Target() {
   // Register the target.
-  RegisterTargetMachine<Z80TargetMachine> X(TheZ80Target);
-
-
+  RegisterTargetMachine<Z80UTargetMachine> X(TheZ80UTarget);
+  RegisterTargetMachine<Z80NoUndocTargetMachine> Y(TheZ80NUTarget);
 }
 
-
-Z80TargetMachine::Z80TargetMachine(const Target &T, const std::string &TT, const std::string &FS, bool is64bit)
-  : LLVMTargetMachine(T, TT),
-    Subtarget(TT, FS),
-    DataLayout("e-p:16:8:8-i8:8:8-i16:8:8-i32:8:8-n8"),
-    TLInfo(*this), 
-    InstrInfo(*this),
-    FrameInfo(TargetFrameInfo::StackGrowsDown, 8, 0) {
-    
+/// Z80TargetMachine ctor - Create an ILP32 architecture model
+///
+Z80TargetMachine::Z80TargetMachine(const Target &T, StringRef TT,
+                                       StringRef CPU, StringRef FS,
+                                       const TargetOptions &Options,
+                                       Reloc::Model RM, CodeModel::Model CM,
+                                       CodeGenOpt::Level OL,
+                                       bool hasUndoc)
+  : LLVMTargetMachine(T, TT, CPU, FS, Options, RM, CM, OL),
+    Subtarget(TT, CPU, FS, hasUndoc),
+    DataLayout(Subtarget.getDataLayout()),
+    TLInfo(*this), TSInfo(*this), InstrInfo(Subtarget),
+    FrameLowering(Subtarget) {
 }
 
-bool Z80TargetMachine::addInstSelector(PassManagerBase &PM, CodeGenOpt::Level OptLevel) {
-  PM.add(createZ80ISelDag(*this));
+namespace {
+/// Z80 Code Generator Pass Configuration Options.
+class Z80PassConfig : public TargetPassConfig {
+public:
+  Z80PassConfig(Z80TargetMachine *TM, PassManagerBase &PM)
+    : TargetPassConfig(TM, PM) {}
+
+  Z80TargetMachine &getZ80TargetMachine() const {
+    return getTM<Z80TargetMachine>();
+  }
+
+  virtual bool addInstSelector();
+  virtual bool addPreEmitPass();
+};
+} // namespace
+
+TargetPassConfig *Z80TargetMachine::createPassConfig(PassManagerBase &PM) {
+  return new Z80PassConfig(this, PM);
+}
+
+bool Z80PassConfig::addInstSelector() {
+  PM->add(createZ80ISelDag(getZ80TargetMachine()));
   return false;
 }
 
-
-bool Z80TargetMachine::addPreEmitPass(PassManagerBase &PM, CodeGenOpt::Level OptLevel){
-
+/// addPreEmitPass - This pass may be implemented by targets that want to run
+/// passes immediately before machine code is emitted.  This should return
+/// true if -print-machineinstrs should print out the code after the passes.
+bool Z80PassConfig::addPreEmitPass(){
+  PM->add(createZ80FPMoverPass(getZ80TargetMachine()));
+  PM->add(createZ80DelaySlotFillerPass(getZ80TargetMachine()));
   return true;
 }
 
+void Z80UTargetMachine::anchor() { }
 
+Z80UTargetMachine::Z80UTargetMachine(const Target &T,
+                                           StringRef TT, StringRef CPU,
+                                           StringRef FS,
+                                           const TargetOptions &Options,
+                                           Reloc::Model RM,
+                                           CodeModel::Model CM,
+                                           CodeGenOpt::Level OL)
+  : Z80TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, true) {
+}
+
+void Z80NoUndocTargetMachine::anchor() { }
+
+Z80NoUndocTargetMachine::Z80NoUndocTargetMachine(const Target &T,
+                                           StringRef TT,  StringRef CPU,
+                                           StringRef FS,
+                                           const TargetOptions &Options,
+                                           Reloc::Model RM,
+                                           CodeModel::Model CM,
+                                           CodeGenOpt::Level OL)
+  : Z80TargetMachine(T, TT, CPU, FS, Options, RM, CM, OL, false) {
+}

@@ -1,4 +1,4 @@
-; RUN: opt -lint -disable-output < %s |& FileCheck %s
+; RUN: opt -basicaa -lint -disable-output < %s |& FileCheck %s
 target datalayout = "e-p:64:64:64"
 
 declare fastcc void @bar()
@@ -151,6 +151,17 @@ entry:
 exit:
   %t3 = phi i32* [ %t4, %exit ]
   %t4 = bitcast i32* %t3 to i32*
-  %x = volatile load i32* %t3
+  %x = load volatile i32* %t3
   br label %exit
+}
+
+; CHECK: Call return type mismatches callee return type
+%struct = type { double, double }
+declare i32 @nonstruct_callee() nounwind
+define void @struct_caller() nounwind {
+entry:
+  call %struct bitcast (i32 ()* @foo to %struct ()*)()
+
+  ; CHECK: Undefined behavior: indirectbr with no destinations
+  indirectbr i8* null, []
 }
